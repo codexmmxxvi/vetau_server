@@ -12,11 +12,10 @@ import java.util.UUID;
 
 @Data
 @Builder
-@AllArgsConstructor
 @NoArgsConstructor
+@AllArgsConstructor
 public class ResponseTicket {
     private UUID id;
-    private UUID userId;
     private String title;
     private LocalDateTime dateStart;
     private LocalDateTime dateEnd;
