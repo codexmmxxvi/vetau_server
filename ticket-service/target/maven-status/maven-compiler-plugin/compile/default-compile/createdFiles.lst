@@ -1,5 +1,0 @@
-codex\mmxxvi\controller\TicketController.class
-codex\mmxxvi\entity\Ticket.class
-codex\mmxxvi\service\impl\TicketServiceImpl.class
-codex\mmxxvi\repository\TicketRepository.class
-codex\mmxxvi\service\TicketService.class
