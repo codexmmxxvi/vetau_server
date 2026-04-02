@@ -25,6 +25,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class Payment {
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @JdbcTypeCode(SqlTypes.CHAR)
@@ -38,15 +39,16 @@ public class Payment {
     @Column(nullable = false)
     private Long amount;
 
-    @Column(name = "payment_method", nullable = false, length = 50)
+    @Column(name = "payment_method", nullable = false, length = 36)
     private String paymentMethod;
 
-    @Column(nullable = false, length = 50)
     @Builder.Default
-    private String status = "PENDING";
+    @Column(nullable = false)
+    private Integer status = 0; // 0: pending, 1: completed, 2: failed, 3: refunded
 
-    @Column(name = "transaction_id", length = 100)
-    private String transactionId;
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "transaction_id", nullable = false, length = 36, unique = true)
+    private UUID transactionId;
 
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
@@ -56,6 +58,9 @@ public class Payment {
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
 
     @PrePersist
     public void prePersist() {

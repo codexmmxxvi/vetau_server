@@ -1,0 +1,298 @@
+package codex.mmxxvi.services.impl;
+
+import codex.mmxxvi.config.VNPayConfig;
+import codex.mmxxvi.dto.request.CreatePaymentRequest;
+import codex.mmxxvi.dto.request.PageRequestDto;
+import codex.mmxxvi.dto.request.RefundRequest;
+import codex.mmxxvi.dto.response.PageResponse;
+import codex.mmxxvi.dto.response.PaymentInitResponse;
+import codex.mmxxvi.dto.response.PaymentResponse;
+import codex.mmxxvi.dto.response.RefundResponse;
+import codex.mmxxvi.entity.Payment;
+import codex.mmxxvi.repository.PaymentRepository;
+import codex.mmxxvi.services.PaymentService;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.TimeZone;
+import java.util.UUID;
+
+@Service
+public class PaymentServiceImpl implements PaymentService {
+    private static final int STATUS_COMPLETED = 1;
+    private static final int STATUS_FAILED = 2;
+    private static final int STATUS_REFUNDED = 3;
+    private static final DateTimeFormatter VNPAY_PAY_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final String VNPAY_METHOD = "VNPAY";
+
+    private final PaymentRepository paymentRepository;
+    private final VNPayConfig vnPayConfig;
+
+    public PaymentServiceImpl(PaymentRepository paymentRepository, VNPayConfig vnPayConfig){
+        this.paymentRepository = paymentRepository;
+        this.vnPayConfig = vnPayConfig;
+    }
+    @Override
+    public PaymentInitResponse createPayment(CreatePaymentRequest createPaymentRequest, HttpServletRequest request) {
+        Payment payment = new Payment();
+        payment.setOrderId(createPaymentRequest.getOrderId());
+        payment.setAmount(createPaymentRequest.getAmount());
+        payment.setPaymentMethod(createPaymentRequest.getPaymentMethod());
+        payment.setStatus(createPaymentRequest.getStatus() != null ? createPaymentRequest.getStatus() : 0);
+        payment.setTransactionId(createPaymentRequest.getTransactionId() != null
+                ? createPaymentRequest.getTransactionId()
+                : UUID.randomUUID());
+        payment.setPaidAt(createPaymentRequest.getPaidAt());
+        Payment savedPayment = paymentRepository.save(payment);
+
+        return PaymentInitResponse.builder()
+                .payment(convertDTO(savedPayment))
+                .paymentUrl(buildPaymentUrl(savedPayment, request))
+                .build();
+    }
+
+    private PaymentResponse convertDTO(Payment payment){
+        return PaymentResponse.builder()
+                .id(payment.getId())
+                .orderId(payment.getOrderId())
+                .transactionId(payment.getTransactionId())
+                .amount(payment.getAmount())
+                .paymentMethod(payment.getPaymentMethod())
+                .status(payment.getStatus())
+                .paidAt(payment.getPaidAt())
+                .createdAt(payment.getCreatedAt())
+                .updatedAt(payment.getUpdatedAt())
+                .build();
+    }
+
+    private String buildPaymentUrl(Payment payment, HttpServletRequest request) {
+        if (!VNPAY_METHOD.equalsIgnoreCase(payment.getPaymentMethod())) {
+            return null;
+        }
+
+        String returnUrl = buildReturnUrl(request);
+        String clientIp = VNPayConfig.getIpAddress(request);
+        String orderType = "other";
+
+        Map<String, String> vnpParams = new HashMap<>();
+        vnpParams.put("vnp_Version", "2.1.0");
+        vnpParams.put("vnp_Command", "pay");
+        vnpParams.put("vnp_TmnCode", vnPayConfig.getTmnCode());
+        vnpParams.put("vnp_Amount", String.valueOf(Math.multiplyExact(payment.getAmount(), 100L)));
+        vnpParams.put("vnp_CurrCode", "VND");
+        vnpParams.put("vnp_TxnRef", payment.getTransactionId().toString());
+        vnpParams.put("vnp_OrderInfo", payment.getOrderId().toString());
+        vnpParams.put("vnp_OrderType", orderType);
+        vnpParams.put("vnp_Locale", "vn");
+        vnpParams.put("vnp_ReturnUrl", returnUrl);
+        vnpParams.put("vnp_IpAddr", clientIp);
+
+        Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Ho_Chi_Minh"));
+        String createdDate = VNPAY_PAY_DATE_FORMATTER.format(calendar.toInstant().atZone(calendar.getTimeZone().toZoneId()).toLocalDateTime());
+        vnpParams.put("vnp_CreateDate", createdDate);
+
+        calendar.add(Calendar.MINUTE, 15);
+        String expireDate = VNPAY_PAY_DATE_FORMATTER.format(calendar.toInstant().atZone(calendar.getTimeZone().toZoneId()).toLocalDateTime());
+        vnpParams.put("vnp_ExpireDate", expireDate);
+
+        List<String> fieldNames = new ArrayList<>(vnpParams.keySet());
+        Collections.sort(fieldNames);
+
+        StringBuilder hashData = new StringBuilder();
+        StringBuilder query = new StringBuilder();
+        Iterator<String> iterator = fieldNames.iterator();
+        while (iterator.hasNext()) {
+            String fieldName = iterator.next();
+            String fieldValue = vnpParams.get(fieldName);
+            if (fieldValue == null || fieldValue.isBlank()) {
+                continue;
+            }
+
+            hashData.append(fieldName)
+                    .append('=')
+                    .append(URLEncoder.encode(fieldValue, StandardCharsets.US_ASCII));
+            query.append(URLEncoder.encode(fieldName, StandardCharsets.US_ASCII))
+                    .append('=')
+                    .append(URLEncoder.encode(fieldValue, StandardCharsets.US_ASCII));
+
+            if (iterator.hasNext()) {
+                hashData.append('&');
+                query.append('&');
+            }
+        }
+
+        String secureHash = VNPayConfig.hmacSHA512(vnPayConfig.getHashSecret(), hashData.toString());
+        return vnPayConfig.getPayUrl() + "?" + query + "&vnp_SecureHash=" + secureHash;
+    }
+
+    private String buildReturnUrl(HttpServletRequest request) {
+        String configuredReturnUrl = vnPayConfig.getReturnUrl();
+        if (configuredReturnUrl.startsWith("http://") || configuredReturnUrl.startsWith("https://")) {
+            return configuredReturnUrl;
+        }
+
+        String baseUrl = request.getScheme() + "://" + request.getServerName();
+        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
+            baseUrl += ":" + request.getServerPort();
+        }
+        return baseUrl + request.getContextPath() + configuredReturnUrl;
+    }
+
+    @Override
+    public PageResponse<PaymentResponse> getPayments(PageRequestDto pageRequestDto) {
+        Pageable pageable = pageRequestDto.getPageable();
+        Page<Payment> paymentPage = paymentRepository.findAll(pageable);
+        return PageResponse.<PaymentResponse>builder()
+                .data(paymentPage.getContent().stream()
+                        .map(this::convertDTO).toList())
+                .pageNo(paymentPage.getNumber())
+                .pageSize(paymentPage.getSize())
+                .totalElements(paymentPage.getTotalElements())
+                .totalPages(paymentPage.getTotalPages())
+                .last(paymentPage.isLast())
+                .build();
+    }
+
+    @Override
+    public PaymentResponse getPaymentByTransactionId(UUID transactionId) {
+        Payment payment = paymentRepository.findByTransactionId(transactionId)
+                .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+        return convertDTO(payment);
+    }
+
+    @Override
+    public RefundResponse refundPayment(UUID transactionId, RefundRequest refundRequest) {
+        UUID parsedTransactionId;
+        try {
+            parsedTransactionId = UUID.fromString(String.valueOf(transactionId));
+        } catch (IllegalArgumentException ex) {
+            throw new RuntimeException("Invalid transaction id: " + transactionId);
+        }
+
+        Payment payment = paymentRepository.findByTransactionId(parsedTransactionId)
+                .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+
+        if (!payment.getId().equals(refundRequest.getPaymentId())) {
+            throw new RuntimeException("Payment id does not match transaction id");
+        }
+
+        if (payment.getStatus() == STATUS_REFUNDED) {
+            throw new RuntimeException("Payment has already been refunded");
+        }
+
+        if (payment.getStatus() != STATUS_COMPLETED) {
+            throw new RuntimeException("Only completed payments can be refunded");
+        }
+
+        if (refundRequest.getRefundAmount() == null || refundRequest.getRefundAmount() <= 0) {
+            throw new RuntimeException("Refund amount must be greater than 0");
+        }
+
+        if (!refundRequest.getRefundAmount().equals(payment.getAmount())) {
+            throw new RuntimeException("Partial refund is not supported");
+        }
+
+        payment.setStatus(STATUS_REFUNDED);
+        Payment refundedPayment = paymentRepository.save(payment);
+
+        return RefundResponse.builder()
+                .paymentId(refundedPayment.getId())
+                .orderId(refundedPayment.getOrderId())
+                .refundAmount(refundRequest.getRefundAmount())
+                .paymentMethod(refundedPayment.getPaymentMethod())
+                .transactionId(refundedPayment.getTransactionId().toString())
+                .status(refundedPayment.getStatus())
+                .refundedAt(refundedPayment.getUpdatedAt())
+                .build();
+    }
+
+    @Override
+    public int handleCallback(HttpServletRequest request) {
+        Map<String, String> fields = new HashMap<>();
+        Enumeration<String> parameterNames = request.getParameterNames();
+
+        while (parameterNames.hasMoreElements()) {
+            String fieldName = parameterNames.nextElement();
+            if ("vnp_SecureHash".equals(fieldName) || "vnp_SecureHashType".equals(fieldName)) {
+                continue;
+            }
+
+            String fieldValue = request.getParameter(fieldName);
+            if (fieldValue != null && !fieldValue.isBlank()) {
+                fields.put(fieldName, fieldValue);
+            }
+        }
+
+        String secureHash = request.getParameter("vnp_SecureHash");
+        if (secureHash == null || secureHash.isBlank()) {
+            return -1;
+        }
+
+        String signValue = vnPayConfig.hashAllFields(fields);
+        if (!signValue.equalsIgnoreCase(secureHash)) {
+            return -1;
+        }
+
+        String transactionReference = request.getParameter("vnp_TxnRef");
+        if (transactionReference == null || transactionReference.isBlank()) {
+            return -1;
+        }
+
+        UUID transactionId;
+        try {
+            transactionId = UUID.fromString(transactionReference);
+        } catch (IllegalArgumentException ex) {
+            return -1;
+        }
+
+        Payment payment = paymentRepository.findByTransactionId(transactionId)
+                .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+
+        String callbackStatus = request.getParameter("vnp_TransactionStatus");
+        if (callbackStatus == null || callbackStatus.isBlank()) {
+            callbackStatus = request.getParameter("vnp_ResponseCode");
+        }
+
+        boolean isSuccessful = "00".equals(callbackStatus);
+        if (payment.getStatus() != STATUS_REFUNDED) {
+            payment.setStatus(isSuccessful ? STATUS_COMPLETED : STATUS_FAILED);
+        }
+
+        if (isSuccessful) {
+            LocalDateTime paidAt = parseVnPayDate(request.getParameter("vnp_PayDate"));
+            if (paidAt != null) {
+                payment.setPaidAt(paidAt);
+            }
+        }
+
+        paymentRepository.save(payment);
+        return isSuccessful ? 1 : 0;
+    }
+
+    private LocalDateTime parseVnPayDate(String payDate) {
+        if (payDate == null || payDate.isBlank()) {
+            return null;
+        }
+
+        try {
+            return LocalDateTime.parse(payDate, VNPAY_PAY_DATE_FORMATTER);
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+}
