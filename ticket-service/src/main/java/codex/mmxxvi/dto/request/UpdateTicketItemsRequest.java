@@ -15,4 +15,8 @@ import java.util.List;
 public class UpdateTicketItemsRequest {
     @Valid
     private List<UpdateTicketItemRequest> ticketItems;
+
+    public List<UpdateTicketItemRequest> getTicketItems() {
+        return ticketItems;
+    }
 }

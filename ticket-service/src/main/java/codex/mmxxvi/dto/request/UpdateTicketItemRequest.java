@@ -34,4 +34,44 @@ public class UpdateTicketItemRequest {
 
     private LocalDateTime saleStartTime;
     private LocalDateTime saleEndTime;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public Integer getStockInitial() {
+        return stockInitial;
+    }
+
+    public Integer getStockAvailable() {
+        return stockAvailable;
+    }
+
+    public Boolean getStockPrepared() {
+        return stockPrepared;
+    }
+
+    public Long getPriceOriginal() {
+        return priceOriginal;
+    }
+
+    public Long getPriceFlash() {
+        return priceFlash;
+    }
+
+    public LocalDateTime getSaleStartTime() {
+        return saleStartTime;
+    }
+
+    public LocalDateTime getSaleEndTime() {
+        return saleEndTime;
+    }
 }
