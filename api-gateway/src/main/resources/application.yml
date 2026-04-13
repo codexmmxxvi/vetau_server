@@ -1,0 +1,18 @@
+spring:
+  security:
+    oauth2:
+      resource server:
+        jwt:
+          jws-algorithms: RS256
+          secret:
+  application:
+    name: api-gateway
+  profiles:
+    active: ${APP_ENV:dev}
+  config:
+    import: "configserver:"
+  cloud:
+    config:
+      uri: "${CONFIG_SERVER_URL:http://localhost:8888}"
+      label: "${CONFIG_SERVER_GIT_LABEL:main}"
+      fail-fast: true
