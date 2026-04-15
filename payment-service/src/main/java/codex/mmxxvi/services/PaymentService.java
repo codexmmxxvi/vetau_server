@@ -7,14 +7,15 @@ import codex.mmxxvi.dto.response.PageResponse;
 import codex.mmxxvi.dto.response.PaymentInitResponse;
 import codex.mmxxvi.dto.response.PaymentResponse;
 import codex.mmxxvi.dto.response.RefundResponse;
-import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import reactor.core.publisher.Mono;
 
 import java.util.UUID;
 
 public interface PaymentService {
-    PaymentInitResponse createPayment(CreatePaymentRequest createPaymentRequest, HttpServletRequest request);
-    PageResponse<PaymentResponse> getPayments(PageRequestDto pageRequestDto);
-    PaymentResponse getPaymentByTransactionId(UUID transactionId);
-    RefundResponse refundPayment(UUID transactionId, RefundRequest refundRequest);
-    int handleCallback(HttpServletRequest request);
+    Mono<PaymentInitResponse> createPayment(CreatePaymentRequest createPaymentRequest, ServerHttpRequest request);
+    Mono<PageResponse<PaymentResponse>> getPayments(PageRequestDto pageRequestDto);
+    Mono<PaymentResponse> getPaymentByTransactionId(UUID transactionId);
+    Mono<RefundResponse> refundPayment(UUID transactionId, RefundRequest refundRequest);
+    Mono<Integer> handleCallback(ServerHttpRequest request);
 }

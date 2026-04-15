@@ -11,10 +11,12 @@ import codex.mmxxvi.dto.response.RefundResponse;
 import codex.mmxxvi.entity.Payment;
 import codex.mmxxvi.repository.PaymentRepository;
 import codex.mmxxvi.services.PaymentService;
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -24,7 +26,6 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -48,22 +49,25 @@ public class PaymentServiceImpl implements PaymentService {
         this.vnPayConfig = vnPayConfig;
     }
     @Override
-    public PaymentInitResponse createPayment(CreatePaymentRequest createPaymentRequest, HttpServletRequest request) {
-        Payment payment = new Payment();
-        payment.setOrderId(createPaymentRequest.getOrderId());
-        payment.setAmount(createPaymentRequest.getAmount());
-        payment.setPaymentMethod(createPaymentRequest.getPaymentMethod());
-        payment.setStatus(createPaymentRequest.getStatus() != null ? createPaymentRequest.getStatus() : 0);
-        payment.setTransactionId(createPaymentRequest.getTransactionId() != null
-                ? createPaymentRequest.getTransactionId()
-                : UUID.randomUUID());
-        payment.setPaidAt(createPaymentRequest.getPaidAt());
-        Payment savedPayment = paymentRepository.save(payment);
+    public Mono<PaymentInitResponse> createPayment(CreatePaymentRequest createPaymentRequest, ServerHttpRequest request) {
+        return Mono.fromCallable(() -> {
+                    Payment payment = new Payment();
+                    payment.setOrderId(createPaymentRequest.getOrderId());
+                    payment.setAmount(createPaymentRequest.getAmount());
+                    payment.setPaymentMethod(createPaymentRequest.getPaymentMethod());
+                    payment.setStatus(createPaymentRequest.getStatus() != null ? createPaymentRequest.getStatus() : 0);
+                    payment.setTransactionId(createPaymentRequest.getTransactionId() != null
+                            ? createPaymentRequest.getTransactionId()
+                            : UUID.randomUUID());
+                    payment.setPaidAt(createPaymentRequest.getPaidAt());
+                    Payment savedPayment = paymentRepository.save(payment);
 
-        return PaymentInitResponse.builder()
-                .payment(convertDTO(savedPayment))
-                .paymentUrl(buildPaymentUrl(savedPayment, request))
-                .build();
+                    return PaymentInitResponse.builder()
+                            .payment(convertDTO(savedPayment))
+                            .paymentUrl(buildPaymentUrl(savedPayment, request))
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private PaymentResponse convertDTO(Payment payment){
@@ -80,7 +84,7 @@ public class PaymentServiceImpl implements PaymentService {
                 .build();
     }
 
-    private String buildPaymentUrl(Payment payment, HttpServletRequest request) {
+    private String buildPaymentUrl(Payment payment, ServerHttpRequest request) {
         if (!VNPAY_METHOD.equalsIgnoreCase(payment.getPaymentMethod())) {
             return null;
         }
@@ -140,105 +144,120 @@ public class PaymentServiceImpl implements PaymentService {
         return vnPayConfig.getPayUrl() + "?" + query + "&vnp_SecureHash=" + secureHash;
     }
 
-    private String buildReturnUrl(HttpServletRequest request) {
+    private String buildReturnUrl(ServerHttpRequest request) {
         String configuredReturnUrl = vnPayConfig.getReturnUrl();
         if (configuredReturnUrl.startsWith("http://") || configuredReturnUrl.startsWith("https://")) {
             return configuredReturnUrl;
         }
 
-        String baseUrl = request.getScheme() + "://" + request.getServerName();
-        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
-            baseUrl += ":" + request.getServerPort();
+        var requestUri = request.getURI();
+        StringBuilder baseUrl = new StringBuilder()
+                .append(requestUri.getScheme())
+                .append("://")
+                .append(requestUri.getHost());
+
+        int port = requestUri.getPort();
+        if (port != -1 && port != 80 && port != 443) {
+            baseUrl.append(":").append(port);
         }
-        return baseUrl + request.getContextPath() + configuredReturnUrl;
+
+        String contextPath = request.getPath().contextPath().value();
+        String normalizedReturnUrl = configuredReturnUrl.startsWith("/") ? configuredReturnUrl : "/" + configuredReturnUrl;
+        return baseUrl + contextPath + normalizedReturnUrl;
     }
 
     @Override
-    public PageResponse<PaymentResponse> getPayments(PageRequestDto pageRequestDto) {
-        Pageable pageable = pageRequestDto.getPageable();
-        Page<Payment> paymentPage = paymentRepository.findAll(pageable);
-        return PageResponse.<PaymentResponse>builder()
-                .data(paymentPage.getContent().stream()
-                        .map(this::convertDTO).toList())
-                .pageNo(paymentPage.getNumber())
-                .pageSize(paymentPage.getSize())
-                .totalElements(paymentPage.getTotalElements())
-                .totalPages(paymentPage.getTotalPages())
-                .last(paymentPage.isLast())
-                .build();
+    public Mono<PageResponse<PaymentResponse>> getPayments(PageRequestDto pageRequestDto) {
+        return Mono.fromCallable(() -> {
+                    Pageable pageable = pageRequestDto.getPageable();
+                    Page<Payment> paymentPage = paymentRepository.findAll(pageable);
+                    return PageResponse.<PaymentResponse>builder()
+                            .data(paymentPage.getContent().stream()
+                                    .map(this::convertDTO).toList())
+                            .pageNo(paymentPage.getNumber())
+                            .pageSize(paymentPage.getSize())
+                            .totalElements(paymentPage.getTotalElements())
+                            .totalPages(paymentPage.getTotalPages())
+                            .last(paymentPage.isLast())
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public PaymentResponse getPaymentByTransactionId(UUID transactionId) {
-        Payment payment = paymentRepository.findByTransactionId(transactionId)
-                .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
-        return convertDTO(payment);
+    public Mono<PaymentResponse> getPaymentByTransactionId(UUID transactionId) {
+        return Mono.fromCallable(() -> {
+                    Payment payment = paymentRepository.findByTransactionId(transactionId)
+                            .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                    return convertDTO(payment);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public RefundResponse refundPayment(UUID transactionId, RefundRequest refundRequest) {
-        UUID parsedTransactionId;
-        try {
-            parsedTransactionId = UUID.fromString(String.valueOf(transactionId));
-        } catch (IllegalArgumentException ex) {
-            throw new RuntimeException("Invalid transaction id: " + transactionId);
-        }
+    public Mono<RefundResponse> refundPayment(UUID transactionId, RefundRequest refundRequest) {
+        return Mono.fromCallable(() -> {
+                    UUID parsedTransactionId;
+                    try {
+                        parsedTransactionId = UUID.fromString(String.valueOf(transactionId));
+                    } catch (IllegalArgumentException ex) {
+                        throw new RuntimeException("Invalid transaction id: " + transactionId);
+                    }
 
-        Payment payment = paymentRepository.findByTransactionId(parsedTransactionId)
-                .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                    Payment payment = paymentRepository.findByTransactionId(parsedTransactionId)
+                            .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
 
-        if (!payment.getId().equals(refundRequest.getPaymentId())) {
-            throw new RuntimeException("Payment id does not match transaction id");
-        }
+                    if (!payment.getId().equals(refundRequest.getPaymentId())) {
+                        throw new RuntimeException("Payment id does not match transaction id");
+                    }
 
-        if (payment.getStatus() == STATUS_REFUNDED) {
-            throw new RuntimeException("Payment has already been refunded");
-        }
+                    if (payment.getStatus() == STATUS_REFUNDED) {
+                        throw new RuntimeException("Payment has already been refunded");
+                    }
 
-        if (payment.getStatus() != STATUS_COMPLETED) {
-            throw new RuntimeException("Only completed payments can be refunded");
-        }
+                    if (payment.getStatus() != STATUS_COMPLETED) {
+                        throw new RuntimeException("Only completed payments can be refunded");
+                    }
 
-        if (refundRequest.getRefundAmount() == null || refundRequest.getRefundAmount() <= 0) {
-            throw new RuntimeException("Refund amount must be greater than 0");
-        }
+                    if (refundRequest.getRefundAmount() == null || refundRequest.getRefundAmount() <= 0) {
+                        throw new RuntimeException("Refund amount must be greater than 0");
+                    }
 
-        if (!refundRequest.getRefundAmount().equals(payment.getAmount())) {
-            throw new RuntimeException("Partial refund is not supported");
-        }
+                    if (!refundRequest.getRefundAmount().equals(payment.getAmount())) {
+                        throw new RuntimeException("Partial refund is not supported");
+                    }
 
-        payment.setStatus(STATUS_REFUNDED);
-        Payment refundedPayment = paymentRepository.save(payment);
+                    payment.setStatus(STATUS_REFUNDED);
+                    Payment refundedPayment = paymentRepository.save(payment);
 
-        return RefundResponse.builder()
-                .paymentId(refundedPayment.getId())
-                .orderId(refundedPayment.getOrderId())
-                .refundAmount(refundRequest.getRefundAmount())
-                .paymentMethod(refundedPayment.getPaymentMethod())
-                .transactionId(refundedPayment.getTransactionId().toString())
-                .status(refundedPayment.getStatus())
-                .refundedAt(refundedPayment.getUpdatedAt())
-                .build();
+                    return RefundResponse.builder()
+                            .paymentId(refundedPayment.getId())
+                            .orderId(refundedPayment.getOrderId())
+                            .refundAmount(refundRequest.getRefundAmount())
+                            .paymentMethod(refundedPayment.getPaymentMethod())
+                            .transactionId(refundedPayment.getTransactionId().toString())
+                            .status(refundedPayment.getStatus())
+                            .refundedAt(refundedPayment.getUpdatedAt())
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public int handleCallback(HttpServletRequest request) {
+    public Mono<Integer> handleCallback(ServerHttpRequest request) {
+        return Mono.fromCallable(() -> {
         Map<String, String> fields = new HashMap<>();
-        Enumeration<String> parameterNames = request.getParameterNames();
-
-        while (parameterNames.hasMoreElements()) {
-            String fieldName = parameterNames.nextElement();
+        request.getQueryParams().forEach((fieldName, values) -> {
             if ("vnp_SecureHash".equals(fieldName) || "vnp_SecureHashType".equals(fieldName)) {
-                continue;
+                return;
             }
-
-            String fieldValue = request.getParameter(fieldName);
+            String fieldValue = values == null || values.isEmpty() ? null : values.get(0);
             if (fieldValue != null && !fieldValue.isBlank()) {
                 fields.put(fieldName, fieldValue);
             }
-        }
+        });
 
-        String secureHash = request.getParameter("vnp_SecureHash");
+        String secureHash = request.getQueryParams().getFirst("vnp_SecureHash");
         if (secureHash == null || secureHash.isBlank()) {
             return -1;
         }
@@ -248,7 +267,7 @@ public class PaymentServiceImpl implements PaymentService {
             return -1;
         }
 
-        String transactionReference = request.getParameter("vnp_TxnRef");
+        String transactionReference = request.getQueryParams().getFirst("vnp_TxnRef");
         if (transactionReference == null || transactionReference.isBlank()) {
             return -1;
         }
@@ -263,9 +282,9 @@ public class PaymentServiceImpl implements PaymentService {
         Payment payment = paymentRepository.findByTransactionId(transactionId)
                 .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
 
-        String callbackStatus = request.getParameter("vnp_TransactionStatus");
+        String callbackStatus = request.getQueryParams().getFirst("vnp_TransactionStatus");
         if (callbackStatus == null || callbackStatus.isBlank()) {
-            callbackStatus = request.getParameter("vnp_ResponseCode");
+            callbackStatus = request.getQueryParams().getFirst("vnp_ResponseCode");
         }
 
         boolean isSuccessful = "00".equals(callbackStatus);
@@ -274,7 +293,7 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         if (isSuccessful) {
-            LocalDateTime paidAt = parseVnPayDate(request.getParameter("vnp_PayDate"));
+            LocalDateTime paidAt = parseVnPayDate(request.getQueryParams().getFirst("vnp_PayDate"));
             if (paidAt != null) {
                 payment.setPaidAt(paidAt);
             }
@@ -282,6 +301,7 @@ public class PaymentServiceImpl implements PaymentService {
 
         paymentRepository.save(payment);
         return isSuccessful ? 1 : 0;
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private LocalDateTime parseVnPayDate(String payDate) {

@@ -8,11 +8,11 @@ import codex.mmxxvi.dto.response.PaymentInitResponse;
 import codex.mmxxvi.dto.response.PaymentResponse;
 import codex.mmxxvi.dto.response.RefundResponse;
 import codex.mmxxvi.services.PaymentService;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.util.UUID;
@@ -40,26 +41,26 @@ public class PaymentController {
     }
 
     @GetMapping("/payments")
-    public PageResponse<PaymentResponse> getPayments(@Valid @ModelAttribute PageRequestDto pageRequestDto) {
+    public Mono<PageResponse<PaymentResponse>> getPayments(@Valid @ModelAttribute PageRequestDto pageRequestDto) {
         return paymentService.getPayments(pageRequestDto);
     }
 
     @PostMapping({"/payments", "/create"})
     @ResponseStatus(HttpStatus.CREATED)
-    public PaymentInitResponse createPayment(
+    public Mono<PaymentInitResponse> createPayment(
             @Valid @RequestBody CreatePaymentRequest createPaymentRequest,
-            HttpServletRequest request
+            ServerHttpRequest request
     ) {
         return paymentService.createPayment(createPaymentRequest, request);
     }
 
     @GetMapping({"/payments/{transactionId}", "/{transactionId}"})
-    public PaymentResponse getPaymentByTransactionId(@PathVariable UUID transactionId) {
+    public Mono<PaymentResponse> getPaymentByTransactionId(@PathVariable UUID transactionId) {
         return paymentService.getPaymentByTransactionId(transactionId);
     }
 
     @PostMapping({"/payments/{transactionId}/refund", "/refund"})
-    public RefundResponse refundPayment(
+    public Mono<RefundResponse> refundPayment(
             @PathVariable(name = "transactionId", required = false) UUID pathTransactionId,
             @RequestParam(name = "transactionId", required = false) UUID requestTransactionId,
             @Valid @RequestBody RefundRequest refundRequest
@@ -71,23 +72,25 @@ public class PaymentController {
         return paymentService.refundPayment(transactionId, refundRequest);
     }
 
-    @GetMapping({"/payments/vnpay/callback", "/vnpay-payment"})
-    public ResponseEntity<Void> handleVnPayCallback(HttpServletRequest request) {
-        int paymentStatus = paymentService.handleCallback(request);
-        URI redirectUri = UriComponentsBuilder.fromUriString(paymentResultUrl)
-                .queryParam("status", mapClientStatus(paymentStatus))
-                .queryParam("orderId", request.getParameter("vnp_OrderInfo"))
-                .queryParam("totalPrice", request.getParameter("vnp_Amount"))
-                .queryParam("paymentTime", request.getParameter("vnp_PayDate"))
-                .queryParam("transactionId", request.getParameter("vnp_TxnRef"))
-                .queryParam("gatewayTransactionNo", request.getParameter("vnp_TransactionNo"))
-                .queryParam("responseCode", request.getParameter("vnp_ResponseCode"))
-                .build(true)
-                .toUri();
+    @GetMapping({"/payments/vnpay/callback", "/payments/vnpay-payment", "/vnpay-payment"})
+    public Mono<ResponseEntity<Void>> handleVnPayCallback(ServerHttpRequest request) {
+        return paymentService.handleCallback(request)
+                .map(paymentStatus -> {
+                    URI redirectUri = UriComponentsBuilder.fromUriString(paymentResultUrl)
+                            .queryParam("status", mapClientStatus(paymentStatus))
+                            .queryParam("orderId", request.getQueryParams().getFirst("vnp_OrderInfo"))
+                            .queryParam("totalPrice", request.getQueryParams().getFirst("vnp_Amount"))
+                            .queryParam("paymentTime", request.getQueryParams().getFirst("vnp_PayDate"))
+                            .queryParam("transactionId", request.getQueryParams().getFirst("vnp_TxnRef"))
+                            .queryParam("gatewayTransactionNo", request.getQueryParams().getFirst("vnp_TransactionNo"))
+                            .queryParam("responseCode", request.getQueryParams().getFirst("vnp_ResponseCode"))
+                            .build(true)
+                            .toUri();
 
-        return ResponseEntity.status(HttpStatus.FOUND)
-                .location(redirectUri)
-                .build();
+                    return ResponseEntity.status(HttpStatus.FOUND)
+                            .location(redirectUri)
+                            .build();
+                });
     }
 
     private String mapClientStatus(int paymentStatus) {

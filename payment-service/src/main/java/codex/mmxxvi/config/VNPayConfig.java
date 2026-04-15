@@ -1,18 +1,26 @@
 package codex.mmxxvi.config;
 
-import jakarta.servlet.http.HttpServletRequest;
-import lombok.Getter;
-import lombok.Setter;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
-
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.UnsupportedEncodingException;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.stereotype.Component;
+
+import lombok.Getter;
+import lombok.Setter;
 
 @Component
 @Getter
@@ -98,12 +106,18 @@ public class VNPayConfig {
             return "";
         }
     }
-    public static String getIpAddress(HttpServletRequest request){
+    public static String getIpAddress(ServerHttpRequest request){
         String ip_address;
         try{
-           ip_address = request.getHeader("x-forwarded-for");
-           if(ip_address == null) {
-               ip_address = request.getLocalAddr();
+           ip_address = request.getHeaders().getFirst("x-forwarded-for");
+           if (ip_address != null && ip_address.contains(",")) {
+               ip_address = ip_address.split(",")[0].trim();
+           }
+           if(ip_address == null || ip_address.isBlank()) {
+               InetSocketAddress remoteAddress = request.getRemoteAddress();
+               ip_address = remoteAddress != null && remoteAddress.getAddress() != null
+                       ? remoteAddress.getAddress().getHostAddress()
+                       : "unknown";
            }
         } catch (Exception e) {
             ip_address = "Invalid IP: " + e.getMessage();
