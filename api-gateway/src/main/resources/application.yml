@@ -1,6 +1,8 @@
 spring:
   application:
     name: api-gateway
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888}
   profiles:
     active: ${APP_ENV:dev}
   security:
@@ -9,11 +11,6 @@ spring:
         jwt:
           issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8081}
           jwk-set-uri: ${AUTH_JWK_SET_URI:${AUTH_ISSUER_URI:http://localhost:8081}/.well-known/jwks.json}
-  cloud:
-    config:
-      enabled: false
-      import-check:
-        enabled: false
 
 eureka:
   client:
