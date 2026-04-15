@@ -6,6 +6,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import codex.mmxxvi.dto.request.PageRequestDto;
 import codex.mmxxvi.dto.response.OrderResponse;
@@ -43,11 +45,13 @@ public class OrderServiceImpl implements OrderService {
 
 
     @Override
-    public PageResponse<OrderResponse> getAllOrders(PageRequestDto pageRequestDto) {
-        Pageable pageable = pageRequestDto.getPageable();
-        Page<Order> orderPage = orderRepository.findAll(pageable);
-
-        return buildPageResponse(orderPage);
+    public Mono<PageResponse<OrderResponse>> getAllOrders(PageRequestDto pageRequestDto) {
+        return Mono.fromCallable(() -> {
+                    Pageable pageable = pageRequestDto.getPageable();
+                    Page<Order> orderPage = orderRepository.findAll(pageable);
+                    return buildPageResponse(orderPage);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private PageResponse<OrderResponse> buildPageResponse(Page<Order> orderPage) {
@@ -64,31 +68,39 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public OrderResponse createOrder(CreateOrderRequest request) {
-        Order order = Order.builder()
-                .userId(request.getUserId())
-                .ticketItemId(request.getTicketItemId())
-                .quantity(request.getQuantity())
-                .unitPrice(request.getUnitPrice())
-                .totalPrice(request.getTotalPrice())
-                .status(request.getStatus() == null ? 0 : request.getStatus())
-                .build();
-
-        return convertDTO(orderRepository.save(order));
+    public Mono<OrderResponse> createOrder(CreateOrderRequest request) {
+        return Mono.fromCallable(() -> {
+                    Order order = Order.builder()
+                            .userId(request.getUserId())
+                            .ticketItemId(request.getTicketItemId())
+                            .quantity(request.getQuantity())
+                            .unitPrice(request.getUnitPrice())
+                            .totalPrice(request.getTotalPrice())
+                            .status(request.getStatus() == null ? 0 : request.getStatus())
+                            .build();
+                    return convertDTO(orderRepository.save(order));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public OrderResponse updateStatus(UUID id, Boolean status) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Order not found"));
-        order.setStatus(Boolean.TRUE.equals(status) ? 1 : 0);
-        return convertDTO(orderRepository.save(order));
+    public Mono<OrderResponse> updateStatus(UUID id, Boolean status) {
+        return Mono.fromCallable(() -> {
+                    Order order = orderRepository.findById(id)
+                            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Order not found"));
+                    order.setStatus(Boolean.TRUE.equals(status) ? 1 : 0);
+                    return convertDTO(orderRepository.save(order));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public PageResponse<OrderResponse> filterOrderFollowingStatus(Integer status, PageRequestDto pageRequestDto) {
-        Pageable pageable = pageRequestDto.getPageable();
-        Page<Order> orderPage = orderRepository.findByStatus(status, pageable);
-        return buildPageResponse(orderPage);
+    public Mono<PageResponse<OrderResponse>> filterOrderFollowingStatus(Integer status, PageRequestDto pageRequestDto) {
+        return Mono.fromCallable(() -> {
+                    Pageable pageable = pageRequestDto.getPageable();
+                    Page<Order> orderPage = orderRepository.findByStatus(status, pageable);
+                    return buildPageResponse(orderPage);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 }
