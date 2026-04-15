@@ -8,60 +8,6 @@ spring:
       enabled: false
       import-check:
         enabled: false
-    gateway:
-      routes:
-        - id: user-auth
-          uri: lb://USER-SERVICE
-          predicates:
-            - Path=/api/users/login,/api/users/register
-          filters:
-            - RewritePath=/api/users/(?<segment>.*), /v1/${segment}
-        - id: user-resource
-          uri: lb://USER-SERVICE
-          predicates:
-            - Path=/api/users,/api/users/**
-          filters:
-            - RewritePath=/api/users(?<remaining>/?.*), /v1/users${remaining}
-        - id: order-plural
-          uri: lb://ORDER-SERVICE
-          predicates:
-            - Path=/api/orders,/api/orders/**
-          filters:
-            - RewritePath=/api/orders(?<remaining>/?.*), /v1/orders${remaining}
-        - id: order-singular
-          uri: lb://ORDER-SERVICE
-          predicates:
-            - Path=/api/order,/api/order/**
-          filters:
-            - RewritePath=/api/order(?<remaining>/?.*), /v1/orders${remaining}
-        - id: payment-plural
-          uri: lb://PAYMENT-SERVICE
-          predicates:
-            - Path=/api/payments,/api/payments/**
-          filters:
-            - RewritePath=/api/payments(?<remaining>/?.*), /v1/payments${remaining}
-        - id: payment-singular
-          uri: lb://PAYMENT-SERVICE
-          predicates:
-            - Path=/api/payment,/api/payment/**
-          filters:
-            - RewritePath=/api/payment(?<remaining>/?.*), /v1/payments${remaining}
-        - id: ticket-plural
-          uri: lb://TICKET-SERVICE
-          predicates:
-            - Path=/api/tickets,/api/tickets/**
-          filters:
-            - RewritePath=/api/tickets(?<remaining>/?.*), /v1/tickets${remaining}
-        - id: ticket-singular
-          uri: lb://TICKET-SERVICE
-          predicates:
-            - Path=/api/ticket,/api/ticket/**
-          filters:
-            - RewritePath=/api/ticket(?<remaining>/?.*), /v1/tickets${remaining}
-        - id: search-resource
-          uri: lb://SEARCH-SERVICE
-          predicates:
-            - Path=/api/search/tickets,/api/search/tickets/**
 
 eureka:
   client:
