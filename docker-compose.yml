@@ -223,7 +223,7 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - mysql_data_v2:/var/lib/mysql
     networks:
       - microservice-network
 
@@ -258,6 +258,7 @@ volumes:
   redis_data:
   mongodb_data:
   mysql_data:
+  mysql_data_v2:
   esdata:
 
 networks:
