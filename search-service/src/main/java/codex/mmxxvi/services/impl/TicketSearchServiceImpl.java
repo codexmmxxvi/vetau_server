@@ -10,19 +10,33 @@ import codex.mmxxvi.dto.response.SearchTicketResponse;
 import codex.mmxxvi.services.TicketSearchService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+
+import static org.springframework.http.HttpStatus.FORBIDDEN;
+import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
 @Service
 public class TicketSearchServiceImpl implements TicketSearchService {
+        private static final int ROLE_ADMIN = 1;
 
     private final WebClient elasticsearchClient;
     private final ObjectMapper objectMapper;
@@ -66,31 +80,41 @@ public class TicketSearchServiceImpl implements TicketSearchService {
         Map<String, Object> payload = objectMapper.convertValue(request, new TypeReference<>() {
         });
 
-        return elasticsearchClient.put()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/{index}/_doc/{id}")
-                        .queryParam("refresh", "wait_for")
-                        .build(ticketIndex, request.getId()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(payload)
-                .retrieve()
-                .toBodilessEntity()
-                .then()
-                .onErrorMap(WebClientResponseException.class, ex -> mapWebClientException("index ticket in Elasticsearch", ex));
+        return resolveAuthContext().flatMap(authContext -> {
+            requireAnyScope(authContext, "search.index");
+            requireAdmin(authContext);
+
+            return elasticsearchClient.put()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/{index}/_doc/{id}")
+                            .queryParam("refresh", "wait_for")
+                            .build(ticketIndex, request.getId()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(payload)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .then()
+                    .onErrorMap(WebClientResponseException.class, ex -> mapWebClientException("index ticket in Elasticsearch", ex));
+        });
     }
 
     @Override
     public Mono<Void> deleteTicket(UUID ticketId) {
-        return elasticsearchClient.delete()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/{index}/_doc/{id}")
-                        .queryParam("refresh", "wait_for")
-                        .build(ticketIndex, ticketId))
-                .retrieve()
-                .toBodilessEntity()
-                .then()
-                .onErrorResume(WebClientResponseException.NotFound.class, ex -> Mono.empty())
-                .onErrorMap(WebClientResponseException.class, ex -> mapWebClientException("delete ticket in Elasticsearch", ex));
+        return resolveAuthContext().flatMap(authContext -> {
+            requireAnyScope(authContext, "search.index");
+            requireAdmin(authContext);
+
+            return elasticsearchClient.delete()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/{index}/_doc/{id}")
+                            .queryParam("refresh", "wait_for")
+                            .build(ticketIndex, ticketId))
+                    .retrieve()
+                    .toBodilessEntity()
+                    .then()
+                    .onErrorResume(WebClientResponseException.NotFound.class, ex -> Mono.empty())
+                    .onErrorMap(WebClientResponseException.class, ex -> mapWebClientException("delete ticket in Elasticsearch", ex));
+        });
     }
 
     private Map<String, Object> buildSearchBody(String keyword, int pageNo, int pageSize) {
@@ -165,4 +189,97 @@ public class TicketSearchServiceImpl implements TicketSearchService {
     private IllegalStateException mapWebClientException(String action, WebClientResponseException ex) {
         return new IllegalStateException("Failed to " + action + ": " + ex.getResponseBodyAsString(), ex);
     }
+
+        private Mono<AuthContext> resolveAuthContext() {
+                return ReactiveSecurityContextHolder.getContext()
+                                .map(securityContext -> securityContext.getAuthentication())
+                                .filter(Authentication::isAuthenticated)
+                                .map(Authentication::getPrincipal)
+                                .filter(Jwt.class::isInstance)
+                                .map(Jwt.class::cast)
+                                .map(this::toAuthContext)
+                                .switchIfEmpty(Mono.error(new ResponseStatusException(UNAUTHORIZED, "Unauthorized")));
+        }
+
+        private AuthContext toAuthContext(Jwt jwt) {
+                String tenantId = jwt.getClaimAsString("tenantId");
+                if (!StringUtils.hasText(tenantId)) {
+                        throw new ResponseStatusException(FORBIDDEN, "Token tenantId claim is missing");
+                }
+
+                Object userIdClaim = jwt.getClaims().get("userId");
+                if (userIdClaim == null) {
+                        throw new ResponseStatusException(FORBIDDEN, "Token userId claim is missing");
+                }
+
+                UUID userId;
+                try {
+                        userId = UUID.fromString(String.valueOf(userIdClaim));
+                } catch (IllegalArgumentException ex) {
+                        throw new ResponseStatusException(FORBIDDEN, "Token userId claim is invalid");
+                }
+
+                Object roleClaim = jwt.getClaims().get("role");
+                int role;
+                if (roleClaim instanceof Number number) {
+                        role = number.intValue();
+                } else {
+                        try {
+                                role = Integer.parseInt(String.valueOf(roleClaim));
+                        } catch (Exception ex) {
+                                throw new ResponseStatusException(FORBIDDEN, "Token role claim is invalid");
+                        }
+                }
+
+                Set<String> scopes = parseScopes(jwt.getClaims().get("scope"));
+                return new AuthContext(userId, role, scopes);
+        }
+
+        private Set<String> parseScopes(Object scopeClaim) {
+                if (scopeClaim == null) {
+                        return Collections.emptySet();
+                }
+
+                if (scopeClaim instanceof String scopeText) {
+                        if (!StringUtils.hasText(scopeText)) {
+                                return Collections.emptySet();
+                        }
+                        return Arrays.stream(scopeText.trim().split("\\s+"))
+                                        .filter(StringUtils::hasText)
+                                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                }
+
+                if (scopeClaim instanceof Iterable<?> iterable) {
+                        Set<String> scopes = new LinkedHashSet<>();
+                        for (Object value : iterable) {
+                                if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                                        scopes.add(String.valueOf(value));
+                                }
+                        }
+                        return scopes;
+                }
+
+                return Collections.emptySet();
+        }
+
+        private void requireAnyScope(AuthContext authContext, String... expectedScopes) {
+                for (String expectedScope : expectedScopes) {
+                        if (authContext.scopes().contains(expectedScope)) {
+                                return;
+                        }
+                }
+                throw new ResponseStatusException(FORBIDDEN, "Insufficient scope");
+        }
+
+        private void requireAdmin(AuthContext authContext) {
+                if (!authContext.isAdmin()) {
+                        throw new ResponseStatusException(FORBIDDEN, "Admin role is required");
+                }
+        }
+
+        private record AuthContext(UUID userId, int role, Set<String> scopes) {
+                boolean isAdmin() {
+                        return role >= ROLE_ADMIN;
+                }
+        }
 }

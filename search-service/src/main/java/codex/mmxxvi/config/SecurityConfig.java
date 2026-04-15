@@ -20,6 +20,10 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(HttpMethod.GET, "/api/search/tickets", "/api/search/tickets/**").permitAll()
+                    .pathMatchers(HttpMethod.POST, "/internal/search/tickets", "/internal/search/tickets/**")
+                    .hasAuthority("SCOPE_search.index")
+                    .pathMatchers(HttpMethod.DELETE, "/internal/search/tickets/**")
+                    .hasAuthority("SCOPE_search.index")
                         .anyExchange().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
                 }))
