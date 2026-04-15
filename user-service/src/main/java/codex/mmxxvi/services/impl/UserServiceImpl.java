@@ -13,24 +13,33 @@ import codex.mmxxvi.services.JwtService;
 import codex.mmxxvi.services.UserService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
+import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
 @Service
 public class UserServiceImpl implements UserService {
     private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("id", "username", "email", "role");
+    private static final int ROLE_ADMIN = 1;
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -54,23 +63,29 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Mono<PageResponse<UserResponse>> getAllUsers(PageRequestDto pageRequestDto) {
-        return Mono.fromCallable(() -> {
+        return resolveAuthContext()
+            .flatMap(authContext -> {
+                requireAnyScope(authContext, "user.read", "user.write");
+                requireAdmin(authContext);
+
+                return Mono.fromCallable(() -> {
                     validateSortField(pageRequestDto.getSortBy());
                     Pageable pageable = pageRequestDto.getPageable();
                     Page<User> userPage = userRepository.findAll(pageable);
 
                     return PageResponse.<UserResponse>builder()
-                            .content(userPage.getContent().stream()
-                                    .map(this::convertDTO)
-                                    .toList())
-                            .pageNo(userPage.getNumber())
-                            .pageSize(userPage.getSize())
-                            .totalElements(userPage.getTotalElements())
-                            .totalPage(userPage.getTotalPages())
-                            .last(userPage.isLast())
-                            .build();
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+                        .content(userPage.getContent().stream()
+                            .map(this::convertDTO)
+                            .toList())
+                        .pageNo(userPage.getNumber())
+                        .pageSize(userPage.getSize())
+                        .totalElements(userPage.getTotalElements())
+                        .totalPage(userPage.getTotalPages())
+                        .last(userPage.isLast())
+                        .build();
+                    })
+                    .subscribeOn(Schedulers.boundedElastic());
+            });
     }
 
     @Override
@@ -83,7 +98,8 @@ public class UserServiceImpl implements UserService {
                     u.setEmail(user.getEmail());
                     u.setUsername(user.getUsername());
                     u.setPassword(passwordEncoder.encode(user.getPassword()));
-                    u.setRole(user.getRole());
+                    // Public registration must not allow privilege escalation.
+                    u.setRole(0);
                     return convertDTO(userRepository.save(u));
                 })
                 .subscribeOn(Schedulers.boundedElastic());
@@ -110,51 +126,67 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Mono<Void> delete(String id) {
-        return Mono.fromRunnable(() -> {
-                    UUID userId = parseUserId(id);
-                    if (!userRepository.existsById(userId)) {
-                        throw new ResponseStatusException(NOT_FOUND, "User not found");
-                    }
-                    userRepository.deleteById(userId);
-                })
-                .subscribeOn(Schedulers.boundedElastic())
-                .then();
+        UUID targetUserId = parseUserId(id);
+
+        return resolveAuthContext()
+                .flatMap(authContext -> {
+                    requireAnyScope(authContext, "user.self", "user.write");
+                    requireAdminOrOwner(authContext, targetUserId);
+
+                    return Mono.fromRunnable(() -> {
+                                if (!userRepository.existsById(targetUserId)) {
+                                    throw new ResponseStatusException(NOT_FOUND, "User not found");
+                                }
+                                userRepository.deleteById(targetUserId);
+                            })
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .then();
+                });
     }
 
     @Override
     public Mono<UserResponse> update(String id, UpdateUserRequest request) {
-        return Mono.fromCallable(() -> {
-                    User user = userRepository.findById(parseUserId(id))
-                            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        UUID targetUserId = parseUserId(id);
 
-                    if (request.getUsername() != null) {
-                        validateTextField(request.getUsername(), "username");
-                        if (!request.getUsername().equals(user.getUsername())) {
-                            ensureUniqueUsername(request.getUsername());
-                            user.setUsername(request.getUsername());
-                        }
-                    }
+        return resolveAuthContext()
+                .flatMap(authContext -> {
+                    requireAnyScope(authContext, "user.self", "user.write");
+                    requireAdminOrOwner(authContext, targetUserId);
 
-                    if (request.getEmail() != null) {
-                        validateTextField(request.getEmail(), "email");
-                        if (!request.getEmail().equals(user.getEmail())) {
-                            ensureUniqueEmail(request.getEmail());
-                            user.setEmail(request.getEmail());
-                        }
-                    }
+                    return Mono.fromCallable(() -> {
+                                User user = userRepository.findById(targetUserId)
+                                        .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
 
-                    if (request.getPassword() != null) {
-                        validateTextField(request.getPassword(), "password");
-                        user.setPassword(passwordEncoder.encode(request.getPassword()));
-                    }
+                                if (request.getUsername() != null) {
+                                    validateTextField(request.getUsername(), "username");
+                                    if (!request.getUsername().equals(user.getUsername())) {
+                                        ensureUniqueUsername(request.getUsername());
+                                        user.setUsername(request.getUsername());
+                                    }
+                                }
 
-                    if (request.getRole() != null) {
-                        user.setRole(request.getRole());
-                    }
+                                if (request.getEmail() != null) {
+                                    validateTextField(request.getEmail(), "email");
+                                    if (!request.getEmail().equals(user.getEmail())) {
+                                        ensureUniqueEmail(request.getEmail());
+                                        user.setEmail(request.getEmail());
+                                    }
+                                }
 
-                    return convertDTO(userRepository.save(user));
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+                                if (request.getPassword() != null) {
+                                    validateTextField(request.getPassword(), "password");
+                                    user.setPassword(passwordEncoder.encode(request.getPassword()));
+                                }
+
+                                if (request.getRole() != null) {
+                                    requireAdmin(authContext);
+                                    user.setRole(request.getRole());
+                                }
+
+                                return convertDTO(userRepository.save(user));
+                            })
+                            .subscribeOn(Schedulers.boundedElastic());
+                });
     }
 
     private void validateSortField(String sortBy) {
@@ -186,6 +218,108 @@ public class UserServiceImpl implements UserService {
             return UUID.fromString(id);
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(BAD_REQUEST, "Invalid user id");
+        }
+    }
+
+    private Mono<AuthContext> resolveAuthContext() {
+        return ReactiveSecurityContextHolder.getContext()
+                .map(securityContext -> securityContext.getAuthentication())
+                .filter(Authentication::isAuthenticated)
+                .map(Authentication::getPrincipal)
+                .filter(Jwt.class::isInstance)
+                .map(Jwt.class::cast)
+                .map(this::toAuthContext)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(UNAUTHORIZED, "Unauthorized")));
+    }
+
+    private AuthContext toAuthContext(Jwt jwt) {
+        String tenantId = jwt.getClaimAsString("tenantId");
+        if (!StringUtils.hasText(tenantId)) {
+            throw new ResponseStatusException(FORBIDDEN, "Token tenantId claim is missing");
+        }
+
+        Object userIdClaim = jwt.getClaims().get("userId");
+        if (userIdClaim == null) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is missing");
+        }
+
+        UUID userId;
+        try {
+            userId = UUID.fromString(String.valueOf(userIdClaim));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is invalid");
+        }
+
+        Object roleClaim = jwt.getClaims().get("role");
+        int role;
+        if (roleClaim instanceof Number number) {
+            role = number.intValue();
+        } else {
+            try {
+                role = Integer.parseInt(String.valueOf(roleClaim));
+            } catch (Exception ex) {
+                throw new ResponseStatusException(FORBIDDEN, "Token role claim is invalid");
+            }
+        }
+
+        Set<String> scopes = parseScopes(jwt.getClaims().get("scope"));
+        return new AuthContext(userId, role, scopes, tenantId);
+    }
+
+    private Set<String> parseScopes(Object scopeClaim) {
+        if (scopeClaim == null) {
+            return Collections.emptySet();
+        }
+
+        if (scopeClaim instanceof String scopeText) {
+            if (!StringUtils.hasText(scopeText)) {
+                return Collections.emptySet();
+            }
+            return Arrays.stream(scopeText.trim().split("\\s+"))
+                    .filter(StringUtils::hasText)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+
+        if (scopeClaim instanceof Iterable<?> iterable) {
+            Set<String> scopes = new LinkedHashSet<>();
+            for (Object value : iterable) {
+                if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                    scopes.add(String.valueOf(value));
+                }
+            }
+            return scopes;
+        }
+
+        return Collections.emptySet();
+    }
+
+    private void requireAnyScope(AuthContext authContext, String... expectedScopes) {
+        for (String expectedScope : expectedScopes) {
+            if (authContext.scopes().contains(expectedScope)) {
+                return;
+            }
+        }
+        throw new ResponseStatusException(FORBIDDEN, "Insufficient scope");
+    }
+
+    private void requireAdmin(AuthContext authContext) {
+        if (!authContext.isAdmin()) {
+            throw new ResponseStatusException(FORBIDDEN, "Admin role is required");
+        }
+    }
+
+    private void requireAdminOrOwner(AuthContext authContext, UUID userId) {
+        if (authContext.isAdmin()) {
+            return;
+        }
+        if (!authContext.userId().equals(userId)) {
+            throw new ResponseStatusException(FORBIDDEN, "You are not allowed to access this user");
+        }
+    }
+
+    private record AuthContext(UUID userId, int role, Set<String> scopes, String tenantId) {
+        boolean isAdmin() {
+            return role >= ROLE_ADMIN;
         }
     }
 }

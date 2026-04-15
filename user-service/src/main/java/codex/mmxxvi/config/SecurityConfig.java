@@ -20,6 +20,12 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(HttpMethod.POST, "/v1/register", "/v1/login").permitAll()
+                    .pathMatchers(HttpMethod.GET, "/v1/users", "/v1/users/**")
+                    .hasAnyAuthority("SCOPE_user.read", "SCOPE_user.write")
+                    .pathMatchers(HttpMethod.PUT, "/v1/users/**")
+                    .hasAnyAuthority("SCOPE_user.self", "SCOPE_user.write")
+                    .pathMatchers(HttpMethod.DELETE, "/v1/users/**")
+                    .hasAnyAuthority("SCOPE_user.self", "SCOPE_user.write")
                         .anyExchange().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
                 }))

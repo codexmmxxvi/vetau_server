@@ -8,6 +8,12 @@ spring:
     representation:
       uuid: standard
     uri: "${USER_MONGODB_URI:mongodb://localhost:27017/user-service}"
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER_URI:${jwt.issuer}}
+          jwk-set-uri: ${AUTH_JWK_SET_URI:${AUTH_ISSUER_URI:${jwt.issuer}}/.well-known/jwks.json}
 eureka:
   client:
     service-url:
@@ -18,7 +24,10 @@ server:
 
 
 jwt:
-  secret: ${JWT_SECRET:12345678901234567890123456789012}
-  issuer: ${JWT_ISSUER:user-service}
+  issuer: ${JWT_ISSUER:http://localhost:8081}
+  key-id: ${JWT_KEY_ID:user-service-key-1}
+  private-key: ${JWT_PRIVATE_KEY:}
+  public-key: ${JWT_PUBLIC_KEY:}
+  default-tenant-id: ${JWT_DEFAULT_TENANT_ID:public}
   access-expiration: 900000
   refresh-expiration: 604800000
