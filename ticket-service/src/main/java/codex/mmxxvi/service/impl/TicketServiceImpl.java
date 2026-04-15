@@ -13,16 +13,30 @@ import codex.mmxxvi.repository.TicketRepository;
 import codex.mmxxvi.service.TicketService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+
+import static org.springframework.http.HttpStatus.FORBIDDEN;
+import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
 @Service
 public class TicketServiceImpl implements TicketService {
+    private static final int ROLE_ADMIN = 1;
 
     private final TicketRepository ticketRepository;
     public TicketServiceImpl(TicketRepository ticketRepository) {
@@ -41,77 +55,106 @@ public class TicketServiceImpl implements TicketService {
 
     @Override
     public Mono<PageResponse<ResponseTicket>> getTickets(PageRequestDto pageRequestDto) {
-        return Mono.fromCallable(() -> {
+        return resolveAuthContext().flatMap(authContext ->
+            Mono.fromCallable(() -> {
+                    requireAnyScope(authContext, "ticket.read", "ticket.write");
+
                     Pageable pageable = pageRequestDto.getPageable();
                     Page<Ticket> ticketPage = ticketRepository.findAll(pageable);
                     return PageResponse.<ResponseTicket>builder()
-                            .content(ticketPage.getContent().stream().map(this::toResponse).toList())
-                            .pageNo(ticketPage.getNumber())
-                            .pageSize(ticketPage.getSize())
-                            .totalElements(ticketPage.getTotalElements())
-                            .totalPages(ticketPage.getTotalPages())
-                            .last(ticketPage.isLast())
-                            .build();
+                        .content(ticketPage.getContent().stream().map(this::toResponse).toList())
+                        .pageNo(ticketPage.getNumber())
+                        .pageSize(ticketPage.getSize())
+                        .totalElements(ticketPage.getTotalElements())
+                        .totalPages(ticketPage.getTotalPages())
+                        .last(ticketPage.isLast())
+                        .build();
                 })
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<ResponseTicket> getTicket(UUID ticketId) {
-        return Mono.fromCallable(() -> ticketRepository.findTicketById(ticketId))
-                .subscribeOn(Schedulers.boundedElastic());
+        return resolveAuthContext().flatMap(authContext ->
+                Mono.fromCallable(() -> {
+                            requireAnyScope(authContext, "ticket.read", "ticket.write");
+                            return ticketRepository.findTicketById(ticketId);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<ResponseTicket> createTicket() {
-        return Mono.fromCallable(() -> {
-                    Ticket ticket = new Ticket();
-                    ticket.setId(UUID.randomUUID());
-                    return toResponse(ticket);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+        return resolveAuthContext().flatMap(authContext ->
+                Mono.fromCallable(() -> {
+                            requireAnyScope(authContext, "ticket.write");
+                            requireAdmin(authContext);
+
+                            Ticket ticket = new Ticket();
+                            ticket.setId(UUID.randomUUID());
+                            return toResponse(ticket);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<ResponseTicket> updateTicket(UUID ticketId, UpdateTicketRequest updateTicketRequest) {
-        return Mono.fromCallable(() -> {
-                    var oldTicket = ticketRepository.findById(ticketId)
-                            .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
+        return resolveAuthContext().flatMap(authContext ->
+                Mono.fromCallable(() -> {
+                            requireAnyScope(authContext, "ticket.write");
+                            requireAdmin(authContext);
 
-                    if (updateTicketRequest.getTitle() != null) {
-                        oldTicket.setTitle(updateTicketRequest.getTitle().trim());
-                    }
+                            var oldTicket = ticketRepository.findById(ticketId)
+                                    .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
 
-                    if (updateTicketRequest.getDateStart() != null) {
-                        oldTicket.setDateStart(updateTicketRequest.getDateStart());
-                    }
-                    if (updateTicketRequest.getDateEnd() != null) {
-                        oldTicket.setDateEnd(updateTicketRequest.getDateEnd());
-                    }
+                            if (updateTicketRequest.getTitle() != null) {
+                                oldTicket.setTitle(updateTicketRequest.getTitle().trim());
+                            }
 
-                    var updatedTicket = ticketRepository.save(oldTicket);
-                    return toResponse(updatedTicket);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+                            if (updateTicketRequest.getDateStart() != null) {
+                                oldTicket.setDateStart(updateTicketRequest.getDateStart());
+                            }
+                            if (updateTicketRequest.getDateEnd() != null) {
+                                oldTicket.setDateEnd(updateTicketRequest.getDateEnd());
+                            }
+
+                            var updatedTicket = ticketRepository.save(oldTicket);
+                            return toResponse(updatedTicket);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<ResponseTicket> updateTicketItems(UUID ticketId, UpdateTicketItemsRequest updateTicketItemsRequest) {
-        return Mono.fromCallable(() -> {
+        return resolveAuthContext().flatMap(authContext ->
+            Mono.fromCallable(() -> {
+                    requireAnyScope(authContext, "ticket.write");
+                    requireAdmin(authContext);
+
                     var ticket = ticketRepository.findById(ticketId)
-                            .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
+                        .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
 
                     ticket.setTicketItems(toTicketItems(ticketId, updateTicketItemsRequest.getTicketItems()));
                     return toResponse(ticketRepository.save(ticket));
                 })
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<Void> deleteTicket(UUID ticketId) {
-        return Mono.fromRunnable(() -> ticketRepository.deleteById(ticketId))
-                .subscribeOn(Schedulers.boundedElastic())
-                .then();
+        return resolveAuthContext().flatMap(authContext -> {
+            requireAnyScope(authContext, "ticket.write");
+            requireAdmin(authContext);
+
+            return Mono.fromRunnable(() -> ticketRepository.deleteById(ticketId))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .then();
+        });
     }
 
     private List<TicketItem> toTicketItems(UUID ticketId, List<UpdateTicketItemRequest> requestItems) {
@@ -144,5 +187,98 @@ public class TicketServiceImpl implements TicketService {
         }
 
         return ticketItems;
+    }
+
+    private Mono<AuthContext> resolveAuthContext() {
+        return ReactiveSecurityContextHolder.getContext()
+                .map(securityContext -> securityContext.getAuthentication())
+                .filter(Authentication::isAuthenticated)
+                .map(Authentication::getPrincipal)
+                .filter(Jwt.class::isInstance)
+                .map(Jwt.class::cast)
+                .map(this::toAuthContext)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(UNAUTHORIZED, "Unauthorized")));
+    }
+
+    private AuthContext toAuthContext(Jwt jwt) {
+        String tenantId = jwt.getClaimAsString("tenantId");
+        if (!StringUtils.hasText(tenantId)) {
+            throw new ResponseStatusException(FORBIDDEN, "Token tenantId claim is missing");
+        }
+
+        Object userIdClaim = jwt.getClaims().get("userId");
+        if (userIdClaim == null) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is missing");
+        }
+
+        UUID userId;
+        try {
+            userId = UUID.fromString(String.valueOf(userIdClaim));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is invalid");
+        }
+
+        Object roleClaim = jwt.getClaims().get("role");
+        int role;
+        if (roleClaim instanceof Number number) {
+            role = number.intValue();
+        } else {
+            try {
+                role = Integer.parseInt(String.valueOf(roleClaim));
+            } catch (Exception ex) {
+                throw new ResponseStatusException(FORBIDDEN, "Token role claim is invalid");
+            }
+        }
+
+        Set<String> scopes = parseScopes(jwt.getClaims().get("scope"));
+        return new AuthContext(userId, role, scopes);
+    }
+
+    private Set<String> parseScopes(Object scopeClaim) {
+        if (scopeClaim == null) {
+            return Collections.emptySet();
+        }
+
+        if (scopeClaim instanceof String scopeText) {
+            if (!StringUtils.hasText(scopeText)) {
+                return Collections.emptySet();
+            }
+            return Arrays.stream(scopeText.trim().split("\\s+"))
+                    .filter(StringUtils::hasText)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+
+        if (scopeClaim instanceof Iterable<?> iterable) {
+            Set<String> scopes = new LinkedHashSet<>();
+            for (Object value : iterable) {
+                if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                    scopes.add(String.valueOf(value));
+                }
+            }
+            return scopes;
+        }
+
+        return Collections.emptySet();
+    }
+
+    private void requireAnyScope(AuthContext authContext, String... expectedScopes) {
+        for (String expectedScope : expectedScopes) {
+            if (authContext.scopes().contains(expectedScope)) {
+                return;
+            }
+        }
+        throw new ResponseStatusException(FORBIDDEN, "Insufficient scope");
+    }
+
+    private void requireAdmin(AuthContext authContext) {
+        if (!authContext.isAdmin()) {
+            throw new ResponseStatusException(FORBIDDEN, "Admin role is required");
+        }
+    }
+
+    private record AuthContext(UUID userId, int role, Set<String> scopes) {
+        boolean isAdmin() {
+            return role >= ROLE_ADMIN;
+        }
     }
 }
