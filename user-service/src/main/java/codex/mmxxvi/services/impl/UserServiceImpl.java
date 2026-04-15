@@ -17,6 +17,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.UUID;
 import java.util.Set;
@@ -51,92 +53,108 @@ public class UserServiceImpl implements UserService {
 
 
     @Override
-    public PageResponse<UserResponse> getAllUsers(PageRequestDto pageRequestDto) {
-        validateSortField(pageRequestDto.getSortBy());
-        Pageable pageable = pageRequestDto.getPageable();
-        Page<User> userPage = userRepository.findAll(pageable);
+    public Mono<PageResponse<UserResponse>> getAllUsers(PageRequestDto pageRequestDto) {
+        return Mono.fromCallable(() -> {
+                    validateSortField(pageRequestDto.getSortBy());
+                    Pageable pageable = pageRequestDto.getPageable();
+                    Page<User> userPage = userRepository.findAll(pageable);
 
-        return PageResponse.<UserResponse>builder()
-                .content(userPage.getContent().stream()
-                        .map(this::convertDTO)
-                        .toList())
-                .pageNo(userPage.getNumber())
-                .pageSize(userPage.getSize())
-                .totalElements(userPage.getTotalElements())
-                .totalPage(userPage.getTotalPages())
-                .last(userPage.isLast())
-                .build();
+                    return PageResponse.<UserResponse>builder()
+                            .content(userPage.getContent().stream()
+                                    .map(this::convertDTO)
+                                    .toList())
+                            .pageNo(userPage.getNumber())
+                            .pageSize(userPage.getSize())
+                            .totalElements(userPage.getTotalElements())
+                            .totalPage(userPage.getTotalPages())
+                            .last(userPage.isLast())
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public UserResponse registerUser(CreateUserRequest user) {
-        ensureUniqueEmail(user.getEmail());
-        ensureUniqueUsername(user.getUsername());
+    public Mono<UserResponse> registerUser(CreateUserRequest user) {
+        return Mono.fromCallable(() -> {
+                    ensureUniqueEmail(user.getEmail());
+                    ensureUniqueUsername(user.getUsername());
 
-        User u = new User();
-        u.setEmail(user.getEmail());
-        u.setUsername(user.getUsername());
-        u.setPassword(passwordEncoder.encode(user.getPassword()));
-        u.setRole(user.getRole());
-        return convertDTO(userRepository.save(u));
+                    User u = new User();
+                    u.setEmail(user.getEmail());
+                    u.setUsername(user.getUsername());
+                    u.setPassword(passwordEncoder.encode(user.getPassword()));
+                    u.setRole(user.getRole());
+                    return convertDTO(userRepository.save(u));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public JwtResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "Invalid email or password"));
+    public Mono<JwtResponse> login(LoginRequest request) {
+        return Mono.fromCallable(() -> {
+                    User user = userRepository.findByEmail(request.getEmail())
+                            .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "Invalid email or password"));
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "Invalid email or password");
-        }
+                    if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+                        throw new ResponseStatusException(UNAUTHORIZED, "Invalid email or password");
+                    }
 
-        return JwtResponse.builder()
-                .accessToken(jwtService.generateAccessToken(user.getEmail()))
-                .refreshToken(jwtService.generateRefreshToken(user.getEmail()))
-                .user(convertDTO(user))
-                .build();
+                    return JwtResponse.builder()
+                            .accessToken(jwtService.generateAccessToken(user))
+                            .refreshToken(jwtService.generateRefreshToken(user))
+                            .user(convertDTO(user))
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public void delete(String id) {
-        UUID userId = parseUserId(id);
-        if (!userRepository.existsById(userId)) {
-            throw new ResponseStatusException(NOT_FOUND, "User not found");
-        }
-        userRepository.deleteById(userId);
+    public Mono<Void> delete(String id) {
+        return Mono.fromRunnable(() -> {
+                    UUID userId = parseUserId(id);
+                    if (!userRepository.existsById(userId)) {
+                        throw new ResponseStatusException(NOT_FOUND, "User not found");
+                    }
+                    userRepository.deleteById(userId);
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
     }
 
     @Override
-    public UserResponse update(String id, UpdateUserRequest request) {
-        User user = userRepository.findById(parseUserId(id))
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+    public Mono<UserResponse> update(String id, UpdateUserRequest request) {
+        return Mono.fromCallable(() -> {
+                    User user = userRepository.findById(parseUserId(id))
+                            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
 
-        if (request.getUsername() != null) {
-            validateTextField(request.getUsername(), "username");
-            if (!request.getUsername().equals(user.getUsername())) {
-                ensureUniqueUsername(request.getUsername());
-                user.setUsername(request.getUsername());
-            }
-        }
+                    if (request.getUsername() != null) {
+                        validateTextField(request.getUsername(), "username");
+                        if (!request.getUsername().equals(user.getUsername())) {
+                            ensureUniqueUsername(request.getUsername());
+                            user.setUsername(request.getUsername());
+                        }
+                    }
 
-        if (request.getEmail() != null) {
-            validateTextField(request.getEmail(), "email");
-            if (!request.getEmail().equals(user.getEmail())) {
-                ensureUniqueEmail(request.getEmail());
-                user.setEmail(request.getEmail());
-            }
-        }
+                    if (request.getEmail() != null) {
+                        validateTextField(request.getEmail(), "email");
+                        if (!request.getEmail().equals(user.getEmail())) {
+                            ensureUniqueEmail(request.getEmail());
+                            user.setEmail(request.getEmail());
+                        }
+                    }
 
-        if (request.getPassword() != null) {
-            validateTextField(request.getPassword(), "password");
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
-        }
+                    if (request.getPassword() != null) {
+                        validateTextField(request.getPassword(), "password");
+                        user.setPassword(passwordEncoder.encode(request.getPassword()));
+                    }
 
-        if (request.getRole() != null) {
-            user.setRole(request.getRole());
-        }
+                    if (request.getRole() != null) {
+                        user.setRole(request.getRole());
+                    }
 
-        return convertDTO(userRepository.save(user));
+                    return convertDTO(userRepository.save(user));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private void validateSortField(String sortBy) {

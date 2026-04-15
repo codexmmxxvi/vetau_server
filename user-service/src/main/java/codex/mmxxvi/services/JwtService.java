@@ -1,10 +1,12 @@
 package codex.mmxxvi.services;
 
+import codex.mmxxvi.entity.User;
+
 public interface JwtService {
-    public String generateAccessToken(String username);
-    public String generateRefreshToken(String username);
-    public String extractUsername(String token);
-    public String extractTokenType(String token);
-    public boolean isValidToken(String token, String username);
-    public boolean isRefreshToken(String token);
+    String generateAccessToken(User user);
+    String generateRefreshToken(User user);
+    String extractUsername(String token);
+    String extractTokenType(String token);
+    boolean isValidToken(String token, String username);
+    boolean isRefreshToken(String token);
 }

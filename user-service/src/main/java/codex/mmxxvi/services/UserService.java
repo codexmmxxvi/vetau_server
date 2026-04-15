@@ -7,13 +7,14 @@ import codex.mmxxvi.dto.request.UpdateUserRequest;
 import codex.mmxxvi.dto.response.JwtResponse;
 import codex.mmxxvi.dto.response.PageResponse;
 import codex.mmxxvi.dto.response.UserResponse;
+import reactor.core.publisher.Mono;
 
 public interface UserService {
 
-    PageResponse<UserResponse> getAllUsers(PageRequestDto pageRequestDto);
-    UserResponse registerUser(CreateUserRequest user);
-    JwtResponse login(LoginRequest request);
-    void delete(String id);
-    UserResponse update(String id, UpdateUserRequest request);
+    Mono<PageResponse<UserResponse>> getAllUsers(PageRequestDto pageRequestDto);
+    Mono<UserResponse> registerUser(CreateUserRequest user);
+    Mono<JwtResponse> login(LoginRequest request);
+    Mono<Void> delete(String id);
+    Mono<UserResponse> update(String id, UpdateUserRequest request);
 
 }

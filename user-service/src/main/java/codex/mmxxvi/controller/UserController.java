@@ -12,6 +12,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Mono;
 
 @RestController
 @RequestMapping("/v1")
@@ -24,29 +25,29 @@ public class UserController {
     }
 
     @GetMapping("/users")
-    public PageResponse<UserResponse> getUsers(@Valid @ModelAttribute PageRequestDto pageRequestDto) {
+    public Mono<PageResponse<UserResponse>> getUsers(@Valid @ModelAttribute PageRequestDto pageRequestDto) {
         return userService.getAllUsers(pageRequestDto);
     }
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    public UserResponse registerUser(@Valid @RequestBody CreateUserRequest user) {
+    public Mono<UserResponse> registerUser(@Valid @RequestBody CreateUserRequest user) {
         return userService.registerUser(user);
     }
 
     @PostMapping("/login")
-    public JwtResponse login(@Valid @RequestBody LoginRequest req) {
+    public Mono<JwtResponse> login(@Valid @RequestBody LoginRequest req) {
         return userService.login(req);
     }
 
     @DeleteMapping("/users/{id}")
-    public ResponseEntity<Void> delete(@PathVariable String id) {
-        userService.delete(id);
-        return ResponseEntity.noContent().build();
+    public Mono<ResponseEntity<Void>> delete(@PathVariable String id) {
+        return userService.delete(id)
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     @PutMapping("/users/{id}")
-    public UserResponse update(@PathVariable String id, @Valid @RequestBody UpdateUserRequest request) {
+    public Mono<UserResponse> update(@PathVariable String id, @Valid @RequestBody UpdateUserRequest request) {
         return userService.update(id, request);
     }
 

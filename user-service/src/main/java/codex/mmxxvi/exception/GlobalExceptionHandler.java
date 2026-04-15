@@ -1,7 +1,6 @@
 package codex.mmxxvi.exception;
 
 import codex.mmxxvi.dto.response.ErrorResponse;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -21,6 +20,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.server.ServerWebExchange;
 import org.springframework.validation.method.ParameterValidationResult;
 
 import java.time.Instant;
@@ -34,23 +34,23 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(
             MethodArgumentNotValidException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
-        return buildValidationErrorResponse(ex.getBindingResult(), request);
+        return buildValidationErrorResponse(ex.getBindingResult(), exchange);
     }
 
     @ExceptionHandler(BindException.class)
     public ResponseEntity<ErrorResponse> handleBindException(
             BindException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
-        return buildValidationErrorResponse(ex.getBindingResult(), request);
+        return buildValidationErrorResponse(ex.getBindingResult(), exchange);
     }
 
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ErrorResponse> handleHandlerMethodValidation(
             HandlerMethodValidationException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         Map<String, String> validationErrors = new LinkedHashMap<>();
         for (ParameterValidationResult result : ex.getParameterValidationResults()) {
@@ -65,7 +65,7 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(
                 HttpStatus.BAD_REQUEST,
                 "Validation failed",
-                request,
+                exchange,
                 validationErrors.isEmpty() ? null : validationErrors
         );
     }
@@ -73,7 +73,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ErrorResponse> handleConstraintViolation(
             ConstraintViolationException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         Map<String, String> validationErrors = new LinkedHashMap<>();
         for (ConstraintViolation<?> violation : ex.getConstraintViolations()) {
@@ -83,7 +83,7 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(
                 HttpStatus.BAD_REQUEST,
                 "Validation failed",
-                request,
+                exchange,
                 validationErrors
         );
     }
@@ -91,12 +91,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> handleUnreadableMessage(
             HttpMessageNotReadableException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         return buildErrorResponse(
                 HttpStatus.BAD_REQUEST,
                 "Malformed request body",
-                request,
+                exchange,
                 null
         );
     }
@@ -104,13 +104,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(
             MethodArgumentTypeMismatchException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         String requiredType = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "required type";
         return buildErrorResponse(
                 HttpStatus.BAD_REQUEST,
                 "Parameter '%s' must be a valid %s".formatted(ex.getName(), requiredType),
-                request,
+                exchange,
                 null
         );
     }
@@ -118,12 +118,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateKeyException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateKey(
             DuplicateKeyException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         return buildErrorResponse(
                 HttpStatus.CONFLICT,
                 "Duplicate resource",
-                request,
+                exchange,
                 null
         );
     }
@@ -131,7 +131,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ErrorResponse> handleResponseStatus(
             ResponseStatusException ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
         return ResponseEntity.status(status).body(
@@ -140,7 +140,7 @@ public class GlobalExceptionHandler {
                         .status(status.value())
                         .error(status.getReasonPhrase())
                         .message(ex.getReason())
-                        .path(request.getRequestURI())
+                        .path(exchange.getRequest().getPath().value())
                         .build()
         );
     }
@@ -148,20 +148,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnhandled(
             Exception ex,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
-        log.error("Unhandled exception for path {}", request.getRequestURI(), ex);
+        log.error("Unhandled exception for path {}", exchange.getRequest().getPath().value(), ex);
         return buildErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Internal server error",
-                request,
+                exchange,
                 null
         );
     }
 
     private ResponseEntity<ErrorResponse> buildValidationErrorResponse(
             BindingResult bindingResult,
-            HttpServletRequest request
+            ServerWebExchange exchange
     ) {
         Map<String, String> validationErrors = new LinkedHashMap<>();
         for (FieldError fieldError : bindingResult.getFieldErrors()) {
@@ -174,7 +174,7 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(
                 HttpStatus.BAD_REQUEST,
                 "Validation failed",
-                request,
+                exchange,
                 validationErrors
         );
     }
@@ -182,7 +182,7 @@ public class GlobalExceptionHandler {
     private ResponseEntity<ErrorResponse> buildErrorResponse(
             HttpStatus status,
             String message,
-            HttpServletRequest request,
+            ServerWebExchange exchange,
             Map<String, String> validationErrors
     ) {
         return ResponseEntity.status(status).body(
@@ -191,7 +191,7 @@ public class GlobalExceptionHandler {
                         .status(status.value())
                         .error(status.getReasonPhrase())
                         .message(message)
-                        .path(request.getRequestURI())
+                        .path(exchange.getRequest().getPath().value())
                         .validationErrors(validationErrors)
                         .build()
         );

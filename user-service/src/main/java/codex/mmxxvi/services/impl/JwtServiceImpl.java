@@ -10,6 +10,7 @@ import javax.crypto.SecretKey;
 import org.springframework.stereotype.Service;
 
 import codex.mmxxvi.config.JwtProperties;
+import codex.mmxxvi.entity.User;
 import codex.mmxxvi.services.JwtService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
@@ -24,18 +25,22 @@ public class JwtServiceImpl implements JwtService {
     private SecretKey getSigningKey(){
         return Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
     }
-    private String generateToken(String username,long expiration,String tokenType){
+
+    private String generateToken(User user, long expiration, String tokenType){
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", tokenType);
+        claims.put("userId", user.getId().toString());
+        claims.put("username", user.getUsername());
+        claims.put("role", user.getRole());
+
         return Jwts.builder()
                 .setClaims(claims)
-                .setSubject(username)
+                .setSubject(user.getEmail())
+                .setIssuer(jwtProperties.getIssuer())
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis()  + expiration))
                 .signWith(getSigningKey())
                 .compact();
-
-
     }
 
     private Claims extraAllClaims(String token){
@@ -47,13 +52,13 @@ public class JwtServiceImpl implements JwtService {
     }
 
     @Override
-    public String generateAccessToken(String username) {
-        return generateToken(username,jwtProperties.getAccessExpiration(),"access");
+    public String generateAccessToken(User user) {
+        return generateToken(user, jwtProperties.getAccessExpiration(), "access");
     }
 
     @Override
-    public String generateRefreshToken(String username) {
-        return generateToken(username,jwtProperties.getRefreshExpiration(),"refresh");
+    public String generateRefreshToken(User user) {
+        return generateToken(user, jwtProperties.getRefreshExpiration(), "refresh");
     }
 
     @Override
