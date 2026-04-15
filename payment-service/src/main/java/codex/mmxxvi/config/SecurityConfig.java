@@ -21,6 +21,12 @@ public class SecurityConfig {
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(HttpMethod.GET, "/v1/payments/vnpay/callback", "/v1/payments/vnpay-payment", "/v1/vnpay-payment")
                         .permitAll()
+                        .pathMatchers(HttpMethod.GET, "/v1/payments", "/v1/payments/**", "/v1/*")
+                        .hasAnyAuthority("SCOPE_payment.read", "SCOPE_payment.read.self")
+                        .pathMatchers(HttpMethod.POST, "/v1/payments/*/refund", "/v1/refund")
+                        .hasAnyAuthority("SCOPE_payment.refund", "SCOPE_payment.refund.self")
+                        .pathMatchers(HttpMethod.POST, "/v1/payments", "/v1/create")
+                        .hasAnyAuthority("SCOPE_payment.write", "SCOPE_payment.write.self")
                         .anyExchange()
                         .authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {

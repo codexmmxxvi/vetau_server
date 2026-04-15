@@ -37,6 +37,10 @@ public class Payment {
     @Column(name = "order_id", nullable = false, length = 36)
     private UUID orderId;
 
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "user_id", length = 36)
+    private UUID userId;
+
     @Column(nullable = false)
     private Long amount;
 

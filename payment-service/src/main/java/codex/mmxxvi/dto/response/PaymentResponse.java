@@ -11,6 +11,7 @@ import lombok.Data;
 public class PaymentResponse {
     private UUID id;
     private UUID orderId;
+    private UUID userId;
     private UUID transactionId;
     private Long amount;
     private String paymentMethod;

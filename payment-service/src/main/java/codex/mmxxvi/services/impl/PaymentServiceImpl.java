@@ -13,8 +13,13 @@ import codex.mmxxvi.repository.PaymentRepository;
 import codex.mmxxvi.services.PaymentService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -24,14 +29,21 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.stream.Collectors;
+
+import static org.springframework.http.HttpStatus.FORBIDDEN;
+import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
 @Service
 public class PaymentServiceImpl implements PaymentService {
@@ -40,6 +52,7 @@ public class PaymentServiceImpl implements PaymentService {
     private static final int STATUS_REFUNDED = 3;
     private static final DateTimeFormatter VNPAY_PAY_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final String VNPAY_METHOD = "VNPAY";
+    private static final int ROLE_ADMIN = 1;
 
     private final PaymentRepository paymentRepository;
     private final VNPayConfig vnPayConfig;
@@ -50,30 +63,36 @@ public class PaymentServiceImpl implements PaymentService {
     }
     @Override
     public Mono<PaymentInitResponse> createPayment(CreatePaymentRequest createPaymentRequest, ServerHttpRequest request) {
-        return Mono.fromCallable(() -> {
+        return resolveAuthContext().flatMap(authContext ->
+            Mono.fromCallable(() -> {
+                    requireAnyScope(authContext, "payment.write", "payment.write.self");
+
                     Payment payment = new Payment();
                     payment.setOrderId(createPaymentRequest.getOrderId());
+                    payment.setUserId(authContext.userId());
                     payment.setAmount(createPaymentRequest.getAmount());
                     payment.setPaymentMethod(createPaymentRequest.getPaymentMethod());
                     payment.setStatus(createPaymentRequest.getStatus() != null ? createPaymentRequest.getStatus() : 0);
                     payment.setTransactionId(createPaymentRequest.getTransactionId() != null
-                            ? createPaymentRequest.getTransactionId()
-                            : UUID.randomUUID());
+                        ? createPaymentRequest.getTransactionId()
+                        : UUID.randomUUID());
                     payment.setPaidAt(createPaymentRequest.getPaidAt());
                     Payment savedPayment = paymentRepository.save(payment);
 
                     return PaymentInitResponse.builder()
-                            .payment(convertDTO(savedPayment))
-                            .paymentUrl(buildPaymentUrl(savedPayment, request))
-                            .build();
+                        .payment(convertDTO(savedPayment))
+                        .paymentUrl(buildPaymentUrl(savedPayment, request))
+                        .build();
                 })
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     private PaymentResponse convertDTO(Payment payment){
         return PaymentResponse.builder()
                 .id(payment.getId())
                 .orderId(payment.getOrderId())
+                .userId(payment.getUserId())
                 .transactionId(payment.getTransactionId())
                 .amount(payment.getAmount())
                 .paymentMethod(payment.getPaymentMethod())
@@ -168,79 +187,110 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     public Mono<PageResponse<PaymentResponse>> getPayments(PageRequestDto pageRequestDto) {
-        return Mono.fromCallable(() -> {
+        return resolveAuthContext().flatMap(authContext ->
+            Mono.fromCallable(() -> {
+                    requireAnyScope(authContext, "payment.read", "payment.read.self");
+
                     Pageable pageable = pageRequestDto.getPageable();
-                    Page<Payment> paymentPage = paymentRepository.findAll(pageable);
+                    Page<Payment> paymentPage;
+                    if (authContext.isAdmin() || authContext.scopes().contains("payment.read")) {
+                    paymentPage = paymentRepository.findAll(pageable);
+                    } else {
+                    paymentPage = paymentRepository.findByUserId(authContext.userId(), pageable);
+                    }
+
                     return PageResponse.<PaymentResponse>builder()
-                            .data(paymentPage.getContent().stream()
-                                    .map(this::convertDTO).toList())
-                            .pageNo(paymentPage.getNumber())
-                            .pageSize(paymentPage.getSize())
-                            .totalElements(paymentPage.getTotalElements())
-                            .totalPages(paymentPage.getTotalPages())
-                            .last(paymentPage.isLast())
-                            .build();
+                        .data(paymentPage.getContent().stream()
+                            .map(this::convertDTO).toList())
+                        .pageNo(paymentPage.getNumber())
+                        .pageSize(paymentPage.getSize())
+                        .totalElements(paymentPage.getTotalElements())
+                        .totalPages(paymentPage.getTotalPages())
+                        .last(paymentPage.isLast())
+                        .build();
                 })
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<PaymentResponse> getPaymentByTransactionId(UUID transactionId) {
-        return Mono.fromCallable(() -> {
-                    Payment payment = paymentRepository.findByTransactionId(transactionId)
-                            .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
-                    return convertDTO(payment);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+        return resolveAuthContext().flatMap(authContext ->
+                Mono.fromCallable(() -> {
+                            requireAnyScope(authContext, "payment.read", "payment.read.self");
+
+                            Payment payment;
+                            if (authContext.isAdmin() || authContext.scopes().contains("payment.read")) {
+                                payment = paymentRepository.findByTransactionId(transactionId)
+                                        .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                            } else {
+                                payment = paymentRepository.findByTransactionIdAndUserId(transactionId, authContext.userId())
+                                        .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                            }
+
+                            return convertDTO(payment);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
     public Mono<RefundResponse> refundPayment(UUID transactionId, RefundRequest refundRequest) {
-        return Mono.fromCallable(() -> {
-                    UUID parsedTransactionId;
-                    try {
-                        parsedTransactionId = UUID.fromString(String.valueOf(transactionId));
-                    } catch (IllegalArgumentException ex) {
-                        throw new RuntimeException("Invalid transaction id: " + transactionId);
-                    }
+        return resolveAuthContext().flatMap(authContext ->
+                Mono.fromCallable(() -> {
+                            requireAnyScope(authContext, "payment.refund", "payment.refund.self");
 
-                    Payment payment = paymentRepository.findByTransactionId(parsedTransactionId)
-                            .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                            UUID parsedTransactionId;
+                            try {
+                                parsedTransactionId = UUID.fromString(String.valueOf(transactionId));
+                            } catch (IllegalArgumentException ex) {
+                                throw new RuntimeException("Invalid transaction id: " + transactionId);
+                            }
 
-                    if (!payment.getId().equals(refundRequest.getPaymentId())) {
-                        throw new RuntimeException("Payment id does not match transaction id");
-                    }
+                            Payment payment;
+                            if (authContext.isAdmin() || authContext.scopes().contains("payment.refund")) {
+                                payment = paymentRepository.findByTransactionId(parsedTransactionId)
+                                        .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                            } else {
+                                payment = paymentRepository.findByTransactionIdAndUserId(parsedTransactionId, authContext.userId())
+                                        .orElseThrow(() -> new RuntimeException("Payment not found with transaction id: " + transactionId));
+                            }
 
-                    if (payment.getStatus() == STATUS_REFUNDED) {
-                        throw new RuntimeException("Payment has already been refunded");
-                    }
+                            if (!payment.getId().equals(refundRequest.getPaymentId())) {
+                                throw new RuntimeException("Payment id does not match transaction id");
+                            }
 
-                    if (payment.getStatus() != STATUS_COMPLETED) {
-                        throw new RuntimeException("Only completed payments can be refunded");
-                    }
+                            if (payment.getStatus() == STATUS_REFUNDED) {
+                                throw new RuntimeException("Payment has already been refunded");
+                            }
 
-                    if (refundRequest.getRefundAmount() == null || refundRequest.getRefundAmount() <= 0) {
-                        throw new RuntimeException("Refund amount must be greater than 0");
-                    }
+                            if (payment.getStatus() != STATUS_COMPLETED) {
+                                throw new RuntimeException("Only completed payments can be refunded");
+                            }
 
-                    if (!refundRequest.getRefundAmount().equals(payment.getAmount())) {
-                        throw new RuntimeException("Partial refund is not supported");
-                    }
+                            if (refundRequest.getRefundAmount() == null || refundRequest.getRefundAmount() <= 0) {
+                                throw new RuntimeException("Refund amount must be greater than 0");
+                            }
 
-                    payment.setStatus(STATUS_REFUNDED);
-                    Payment refundedPayment = paymentRepository.save(payment);
+                            if (!refundRequest.getRefundAmount().equals(payment.getAmount())) {
+                                throw new RuntimeException("Partial refund is not supported");
+                            }
 
-                    return RefundResponse.builder()
-                            .paymentId(refundedPayment.getId())
-                            .orderId(refundedPayment.getOrderId())
-                            .refundAmount(refundRequest.getRefundAmount())
-                            .paymentMethod(refundedPayment.getPaymentMethod())
-                            .transactionId(refundedPayment.getTransactionId().toString())
-                            .status(refundedPayment.getStatus())
-                            .refundedAt(refundedPayment.getUpdatedAt())
-                            .build();
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+                            payment.setStatus(STATUS_REFUNDED);
+                            Payment refundedPayment = paymentRepository.save(payment);
+
+                            return RefundResponse.builder()
+                                    .paymentId(refundedPayment.getId())
+                                    .orderId(refundedPayment.getOrderId())
+                                    .refundAmount(refundRequest.getRefundAmount())
+                                    .paymentMethod(refundedPayment.getPaymentMethod())
+                                    .transactionId(refundedPayment.getTransactionId().toString())
+                                    .status(refundedPayment.getStatus())
+                                    .refundedAt(refundedPayment.getUpdatedAt())
+                                    .build();
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     @Override
@@ -313,6 +363,93 @@ public class PaymentServiceImpl implements PaymentService {
             return LocalDateTime.parse(payDate, VNPAY_PAY_DATE_FORMATTER);
         } catch (DateTimeParseException ex) {
             return null;
+        }
+    }
+
+    private Mono<AuthContext> resolveAuthContext() {
+        return ReactiveSecurityContextHolder.getContext()
+                .map(securityContext -> securityContext.getAuthentication())
+                .filter(Authentication::isAuthenticated)
+                .map(Authentication::getPrincipal)
+                .filter(Jwt.class::isInstance)
+                .map(Jwt.class::cast)
+                .map(this::toAuthContext)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(UNAUTHORIZED, "Unauthorized")));
+    }
+
+    private AuthContext toAuthContext(Jwt jwt) {
+        String tenantId = jwt.getClaimAsString("tenantId");
+        if (!StringUtils.hasText(tenantId)) {
+            throw new ResponseStatusException(FORBIDDEN, "Token tenantId claim is missing");
+        }
+
+        Object userIdClaim = jwt.getClaims().get("userId");
+        if (userIdClaim == null) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is missing");
+        }
+
+        UUID userId;
+        try {
+            userId = UUID.fromString(String.valueOf(userIdClaim));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(FORBIDDEN, "Token userId claim is invalid");
+        }
+
+        Object roleClaim = jwt.getClaims().get("role");
+        int role;
+        if (roleClaim instanceof Number number) {
+            role = number.intValue();
+        } else {
+            try {
+                role = Integer.parseInt(String.valueOf(roleClaim));
+            } catch (Exception ex) {
+                throw new ResponseStatusException(FORBIDDEN, "Token role claim is invalid");
+            }
+        }
+
+        Set<String> scopes = parseScopes(jwt.getClaims().get("scope"));
+        return new AuthContext(userId, role, scopes);
+    }
+
+    private Set<String> parseScopes(Object scopeClaim) {
+        if (scopeClaim == null) {
+            return Collections.emptySet();
+        }
+
+        if (scopeClaim instanceof String scopeText) {
+            if (!StringUtils.hasText(scopeText)) {
+                return Collections.emptySet();
+            }
+            return Arrays.stream(scopeText.trim().split("\\s+"))
+                    .filter(StringUtils::hasText)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+
+        if (scopeClaim instanceof Iterable<?> iterable) {
+            Set<String> scopes = new LinkedHashSet<>();
+            for (Object value : iterable) {
+                if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                    scopes.add(String.valueOf(value));
+                }
+            }
+            return scopes;
+        }
+
+        return Collections.emptySet();
+    }
+
+    private void requireAnyScope(AuthContext authContext, String... expectedScopes) {
+        for (String expectedScope : expectedScopes) {
+            if (authContext.scopes().contains(expectedScope)) {
+                return;
+            }
+        }
+        throw new ResponseStatusException(FORBIDDEN, "Insufficient scope");
+    }
+
+    private record AuthContext(UUID userId, int role, Set<String> scopes) {
+        boolean isAdmin() {
+            return role >= ROLE_ADMIN;
         }
     }
 }

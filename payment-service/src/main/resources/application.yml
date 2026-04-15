@@ -1,6 +1,12 @@
 spring:
   application:
     name: payment-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8081}
+          jwk-set-uri: ${AUTH_JWK_SET_URI:${AUTH_ISSUER_URI:http://localhost:8081}/.well-known/jwks.json}
   datasource:
     url: ${PAYMENT_DB_URL:jdbc:mysql://localhost:3306/payment_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: ${PAYMENT_DB_USERNAME:root}
@@ -18,10 +24,6 @@ eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
-
-jwt:
-  secret: ${JWT_SECRET:12345678901234567890123456789012}
-  issuer: ${JWT_ISSUER:user-service}
 
 app:
   client:
