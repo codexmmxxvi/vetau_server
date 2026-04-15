@@ -215,7 +215,7 @@ services:
 
   sql-service:
     container_name: sql-service
-    image: mysql:latest
+    image: mysql:8.0.45
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: 123456
