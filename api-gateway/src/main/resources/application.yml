@@ -4,6 +4,10 @@ spring:
   profiles:
     active: ${APP_ENV:dev}
   cloud:
+    config:
+      enabled: false
+      import-check:
+        enabled: false
     gateway:
       routes:
         - id: user-auth
