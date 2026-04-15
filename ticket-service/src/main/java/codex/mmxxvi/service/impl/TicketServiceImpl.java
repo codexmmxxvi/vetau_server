@@ -14,6 +14,8 @@ import codex.mmxxvi.service.TicketService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,63 +40,78 @@ public class TicketServiceImpl implements TicketService {
     }
 
     @Override
-    public PageResponse<ResponseTicket> getTickets(PageRequestDto pageRequestDto) {
-        Pageable pageable = pageRequestDto.getPageable();
-        Page<Ticket> ticketPage = ticketRepository.findAll(pageable);
-        return PageResponse.<ResponseTicket>builder()
-                .content(ticketPage.getContent().stream().map(this::toResponse).toList())
-                .pageNo(ticketPage.getNumber())
-                .pageSize(ticketPage.getSize())
-                .totalElements(ticketPage.getTotalElements())
-                .totalPages(ticketPage.getTotalPages())
-                .last(ticketPage.isLast())
-                .build();
+    public Mono<PageResponse<ResponseTicket>> getTickets(PageRequestDto pageRequestDto) {
+        return Mono.fromCallable(() -> {
+                    Pageable pageable = pageRequestDto.getPageable();
+                    Page<Ticket> ticketPage = ticketRepository.findAll(pageable);
+                    return PageResponse.<ResponseTicket>builder()
+                            .content(ticketPage.getContent().stream().map(this::toResponse).toList())
+                            .pageNo(ticketPage.getNumber())
+                            .pageSize(ticketPage.getSize())
+                            .totalElements(ticketPage.getTotalElements())
+                            .totalPages(ticketPage.getTotalPages())
+                            .last(ticketPage.isLast())
+                            .build();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public ResponseTicket getTicket(UUID ticketId) {
-        return ticketRepository.findTicketById(ticketId);
+    public Mono<ResponseTicket> getTicket(UUID ticketId) {
+        return Mono.fromCallable(() -> ticketRepository.findTicketById(ticketId))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public ResponseTicket createTicket() {
-        Ticket ticket = new Ticket();
-        ticket.setId(UUID.randomUUID());
-        return toResponse(ticket);
+    public Mono<ResponseTicket> createTicket() {
+        return Mono.fromCallable(() -> {
+                    Ticket ticket = new Ticket();
+                    ticket.setId(UUID.randomUUID());
+                    return toResponse(ticket);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public ResponseTicket updateTicket(UUID ticketId, UpdateTicketRequest updateTicketRequest) {
-        var oldTicket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
+    public Mono<ResponseTicket> updateTicket(UUID ticketId, UpdateTicketRequest updateTicketRequest) {
+        return Mono.fromCallable(() -> {
+                    var oldTicket = ticketRepository.findById(ticketId)
+                            .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
 
-        if (updateTicketRequest.getTitle() != null) {
-            oldTicket.setTitle(updateTicketRequest.getTitle().trim());
-        }
+                    if (updateTicketRequest.getTitle() != null) {
+                        oldTicket.setTitle(updateTicketRequest.getTitle().trim());
+                    }
 
-        if (updateTicketRequest.getDateStart() != null) {
-            oldTicket.setDateStart(updateTicketRequest.getDateStart());
-        }
-        if (updateTicketRequest.getDateEnd() != null) {
-            oldTicket.setDateEnd(updateTicketRequest.getDateEnd());
-        }
+                    if (updateTicketRequest.getDateStart() != null) {
+                        oldTicket.setDateStart(updateTicketRequest.getDateStart());
+                    }
+                    if (updateTicketRequest.getDateEnd() != null) {
+                        oldTicket.setDateEnd(updateTicketRequest.getDateEnd());
+                    }
 
-        var updatedTicket = ticketRepository.save(oldTicket);
-        return toResponse(updatedTicket);
+                    var updatedTicket = ticketRepository.save(oldTicket);
+                    return toResponse(updatedTicket);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public ResponseTicket updateTicketItems(UUID ticketId, UpdateTicketItemsRequest updateTicketItemsRequest) {
-        var ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
+    public Mono<ResponseTicket> updateTicketItems(UUID ticketId, UpdateTicketItemsRequest updateTicketItemsRequest) {
+        return Mono.fromCallable(() -> {
+                    var ticket = ticketRepository.findById(ticketId)
+                            .orElseThrow(() -> new AppExceptions.ResourceNotFoundException("Ticket not found"));
 
-        ticket.setTicketItems(toTicketItems(ticketId, updateTicketItemsRequest.getTicketItems()));
-        return toResponse(ticketRepository.save(ticket));
+                    ticket.setTicketItems(toTicketItems(ticketId, updateTicketItemsRequest.getTicketItems()));
+                    return toResponse(ticketRepository.save(ticket));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public void deleteTicket(UUID ticketId) {
-        ticketRepository.deleteById(ticketId);
+    public Mono<Void> deleteTicket(UUID ticketId) {
+        return Mono.fromRunnable(() -> ticketRepository.deleteById(ticketId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
     }
 
     private List<TicketItem> toTicketItems(UUID ticketId, List<UpdateTicketItemRequest> requestItems) {
