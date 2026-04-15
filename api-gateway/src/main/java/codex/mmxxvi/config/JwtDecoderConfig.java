@@ -21,7 +21,10 @@ import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 @Configuration
 public class JwtDecoderConfig {
     @Bean
-    ReactiveJwtDecoder reactiveJwtDecoder(@Value("${jwt.secret}") String secret){
+    ReactiveJwtDecoder reactiveJwtDecoder(
+            @Value("${jwt.secret}") String secret,
+            @Value("${jwt.issuer}") String issuer
+    ){
         SecretKey secretKey = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
         NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withSecretKey(secretKey)
                 .macAlgorithm(MacAlgorithm.HS256)
@@ -32,7 +35,10 @@ public class JwtDecoderConfig {
                         : OAuth2TokenValidatorResult.failure(
                         new OAuth2Error("invalid_token", "Only access token is allowed", null));
 
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), accessTypeValidator));
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefaultWithIssuer(issuer),
+                accessTypeValidator
+        ));
         return decoder;
     }
 }
