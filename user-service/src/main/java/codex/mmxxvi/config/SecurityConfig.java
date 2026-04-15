@@ -20,6 +20,7 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(HttpMethod.POST, "/v1/register", "/v1/login").permitAll()
+                    .pathMatchers(HttpMethod.GET, "/.well-known/jwks.json").permitAll()
                     .pathMatchers(HttpMethod.GET, "/v1/users", "/v1/users/**")
                     .hasAnyAuthority("SCOPE_user.read", "SCOPE_user.write")
                     .pathMatchers(HttpMethod.PUT, "/v1/users/**")
